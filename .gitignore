@@ -181,9 +181,6 @@ secret/
 .aws/
 .azure/
 
-# Wrangler configuration
-wrangler.toml
-
 # Miscellaneous
 *.log
 logs/
