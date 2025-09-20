@@ -1,39 +1,50 @@
 {
-  "name": "web",
-  "version": "0.1.0",
-  "private": true,
+  "name": "ai-uploader",
+  "version": "1.0.0",
+  "description": "AIコンテンツアップローダー",
+  "type": "module",
   "scripts": {
-    "dev": "next dev --turbopack",
-    "build": "next build --turbopack",
-    "start": "next start",
-    "lint": "eslint",
-    "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
-    "deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
-    "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts"
+    "dev": "vite dev",
+    "build": "vite build --mode client && vite build",
+    "preview": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate": "wrangler d1 migrations apply ai_uploader_db",
+    "db:generate": "wrangler d1 migrations create",
+    "db:list": "wrangler d1 migrations list",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --ext .ts,.tsx,.js,.jsx",
+    "format": "prettier --write ."
   },
   "dependencies": {
-    "@opennextjs/cloudflare": "^1.8.3",
-    "@radix-ui/react-slot": "^1.2.3",
-    "@supabase/ssr": "^0.7.0",
-    "@supabase/supabase-js": "^2.57.4",
-    "drizzle-orm": "^0.44.5",
-    "lucide-react": "^0.544.0",
-    "next": "15.5.3",
-    "react": "19.1.0",
-    "react-dom": "19.1.0",
-    "react-dropzone": "^14.3.8"
+    "@cloudflare/workers-types": "^4.20240912.0",
+    "@hono/zod-validator": "^0.2.2",
+    "@supabase/supabase-js": "^2.45.4",
+    "hono": "^4.6.5",
+    "honox": "^0.1.24",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250919.0",
-    "@eslint/eslintrc": "^3",
-    "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "eslint": "^9",
-    "eslint-config-next": "15.5.3",
-    "tailwindcss": "^4",
-    "typescript": "^5",
-    "wrangler": "^4.38.0"
-  }
+    "@cloudflare/vitest-pool-workers": "^0.5.14",
+    "@tailwindcss/typography": "^0.5.15",
+    "@types/node": "^22.8.6",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^9.14.0",
+    "eslint-config-prettier": "^9.1.0",
+    "postcss": "^8.5.0",
+    "prettier": "^3.3.3",
+    "tailwindcss": "^3.4.14",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.4",
+    "wrangler": "^3.86.0"
+  },
+  "keywords": [
+    "ai",
+    "uploader",
+    "cloudflare",
+    "hono",
+    "honox"
+  ],
+  "author": "",
+  "license": "MIT"
 }

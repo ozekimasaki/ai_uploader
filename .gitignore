@@ -1,46 +1,32 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
 # Dependencies
-/node_modules
-/.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
-
-# Testing
-/coverage
-.nyc_output
-
-# Next.js
-/.next/
-/out/
-/build
-
-# Environment Variables (Security Critical)
-.env
-.env*.local
-.env.development.local
-.env.test.local
-.env.production.local
-!.env.example
-
-# Vercel
-.vercel
-
-# TypeScript
-*.tsbuildinfo
-next-env.d.ts
-
-# Debug & Logs
+node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-.pnpm-debug.log*
-lerna-debug.log*
-.pnpm-debug.log*
+
+# Production build
+dist/
+.wrangler/
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
 
 # Runtime data
 pids
@@ -49,45 +35,16 @@ pids
 *.pid.lock
 
 # Coverage directory used by tools like istanbul
-coverage
-*.lcov
+coverage/
+
+# nyc test coverage
 .nyc_output
-
-# Grunt intermediate storage (https://gruntjs.com/creating-plugins#storing-task-files)
-.grunt
-
-# Bower dependency directory (https://bower.io/)
-bower_components
-
-# node-waf configuration
-.lock-wscript
-
-# Compiled binary addons (https://nodejs.org/api/addons.html)
-build/Release
 
 # Dependency directories
 jspm_packages/
 
-# Snowpack dependency directory (https://snowpack.dev/)
-web_modules/
-
-# TypeScript cache
-*.tsbuildinfo
-
 # Optional npm cache directory
 .npm
-
-# Optional eslint cache
-.eslintcache
-
-# Optional stylelint cache
-.stylelintcache
-
-# Microbundle cache
-.rpt2_cache/
-.rts2_cache_cjs/
-.rts2_cache_es/
-.rts2_cache_umd/
 
 # Optional REPL history
 .node_repl_history
@@ -100,93 +57,28 @@ web_modules/
 
 # dotenv environment variables file
 .env
-.env.test
-.env.production
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
 .parcel-cache
 
-# Next.js build output
+# next.js build output
 .next
 
-# Nuxt.js build / generate output
+# nuxt.js build output
 .nuxt
-dist
 
-# Gatsby files
-.cache/
-public
+# vuepress build output
+.vuepress/dist
 
-# Storybook build outputs
-.out
-.storybook-out
+# Serverless directories
+.serverless
 
-# Temporary folders
-tmp/
-temp/
+# FuseBox cache
+.fusebox/
 
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+# DynamoDB Local files
+.dynamodb/
 
-# OS generated files
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# Database
-*.db
-*.sqlite
-*.sqlite3
-
-# Backup files
-*.backup
-*.bak
-*.old
-*.orig
-*.rej
-*~
-
-# Security sensitive files
-*.key
-*.pem
-*.p12
-*.pfx
-*.p8
-*.cer
-*.der
-*.csr
-*.srl
-*.p7b
-*.p7c
-*.p7r
-*.p7s
-secrets.json
-config/production.json
-private/
-secret/
-
-# Cloud provider files
-.aws/
-.azure/
-
-# Miscellaneous
-*.log
-logs/
-*.pid
-*.pid.lock
-*.seed
-
-
-.wrangler/
+# TernJS port file
+.tern-port

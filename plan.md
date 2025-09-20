@@ -103,14 +103,14 @@ D1設計メモ
 - レート制御はIP + userId + itemIdの複合キーで公平性を担保。
 - 既定TTL=15分。大容量DL向けに最大120分までの延長を許容（環境変数）。
 
-## API / ルーティング（Next.js + Cloudflare Workers）
+## API / ルーティング（HonoX）
 - 推奨ルーティング（最適案）
 	- `GET /` … 新着/人気一覧（`/items`のエイリアス）
 	- `GET /items` … 一覧（page, q, tag, category, sort）
 	- `GET /items/[id]` … 詳細（SEOはタイトルをmetaに反映。slugは任意）
 	- `GET /u/[username]` … ユーザーページ
 	- `GET /upload` … アップロード画面（要ログイン）
-- API（Route Handlers）
+- API（Hono ベース）
 	- `POST /api/upload/presign` … R2用署名URL/マルチパート情報の発行（要ログイン）
 	- `POST /api/items` … メタデータ作成（要ログイン）
 	- `GET /api/items` … 一覧取得（フィルタ/並び替え/ページング）
@@ -119,6 +119,15 @@ D1設計メモ
 	- `DELETE /api/items/[id]` … 削除（所有者）
 	- `POST /api/items/[id]/download-url` … 署名URL発行（要ログイン＋レート制御）
 	- `POST /api/reports` … 通報作成（ログイン任意）
+
+### HonoX 固有の機能
+- ファイルベースのルーティング（`app/routes/` 配下のファイル）
+- レイアウト機能（`_layout.tsx` で共通レイアウト定義）
+- ミドルウェア対応（認証、レート制限等）
+- SSR/SSG 対応（Static Site Generation）
+- 静的アセットの自動処理
+- クライアントサイドスクリプト対応
+- 環境別ビルド（dev/production）
 
 ルーティング指針（回答）
 - 詳細ページは「IDを正」とし、`/items/[id]` を正規URLにするのが最適。タイトルはSEOで利用。
@@ -151,21 +160,146 @@ D1設計メモ
 	- 独自ライセンス（任意文面）
 - Promptの扱い: 投稿主が任意で公開可。公開時は他者閲覧可能（再利用可否は将来設定）
 
+## UI/UX デザイン
+### デザインシステム
+- **CSS フレームワーク**: Tailwind CSS（ユーティリティファースト、レスポンシブ対応）
+- **アニメーション**: GSAP（GreenSock Animation Platform）で要所の立体的なアニメーション表現
+- **カラーパレット**: ダークモード対応、アクセシビリティ考慮の配色
+- **タイポグラフィ**: システムフォントを基調とした可読性の高いフォント設定
+
+### アニメーション設計
+- **ページ遷移**: GSAP Timeline による滑らかな画面遷移
+- **要素出現**: ScrollTrigger によるスクロール連動アニメーション
+- **ホバー効果**: 立体的なボタン・カードのホバーアニメーション
+- **ローディング**: スケルトンスクリーンとプログレスアニメーション
+- **エラーハンドリング**: ユーザーフレンドリーなエラー状態のアニメーション
+
+### レスポンシブデザイン
+- **モバイルファースト**: タブレット・デスクトップへの段階的拡張
+- **グリッドシステム**: CSS Grid と Flexbox の組み合わせ
+- **タッチフレンドリー**: 適切なタッチターゲットサイズの確保
+- **パフォーマンス**: アニメーションのGPUアクセラレーション活用
+
 ## 技術構成
-- フロント/SSR: Next.js（App Router）
-- 実行基盤: Cloudflare Workers（Next.jsは `next-on-pages` 相当のアダプタでPages/Functions上にデプロイ）
-- 認証: Supabase Auth（Discord）
-- ストレージ: Cloudflare R2（S3互換API）
-- メタデータDB: Cloudflare D1（採用）
-- レート制御: Cloudflare Workers + KV/Durable Objects（IPごとトークンバケット）
-- ログ/メトリクス: Cloudflare Logs/Analytics（必要に応じて）
+- フレームワーク: HonoX（Hono ベースのメタフレームワーク、TypeScript 標準対応）
+- 実行基盤: Cloudflare Workers（HonoX 標準対応）
+- 認証: Supabase Auth（Discord OAuth、JWT トークン管理）
+- ストレージ: Cloudflare R2（S3互換API、bucket: ai-uploader、2GB対応マルチパートアップロード）
+- メタデータDB: Cloudflare D1（SQLite互換、データベース: ai_uploader_db / ID: 495ad2cd-48b5-46b6-85b0-2a08a7639ea4、外部キー制約・インデックス対応）
+- レート制御: Cloudflare Workers + Durable Objects（IP・ユーザー・アイテム複合キーによる公平なレート制限、Durable Objects による分散ロック・状態管理）
+- ログ/メトリクス: Cloudflare Logs/Analytics（リアルタイムログ・分析、Workers Logs・Tail Workers 対応）
+- ビルドツール: Vite 7（HonoX 統合、高速開発サーバー）
+
+### フロントエンド技術
+- **スタイリング**: Tailwind CSS（ユーティリティファースト、レスポンシブ対応）
+- **アニメーション**: GSAP（GreenSock Animation Platform、ScrollTrigger・Timeline 対応）
+- **アイコン**: Heroicons または Lucide Icons（SVG アイコンセット）
+- **UI コンポーネント**: Headless UI または Radix UI（アクセシビリティ対応）
+
+### パフォーマンス最適化
+- **画像最適化**: Cloudflare Images または WebP/AVIF 対応
+- **バンドル分割**: Vite のコード分割機能
+- **キャッシュ戦略**: Service Worker による静的アセットキャッシュ
+- **CDN**: Cloudflare のグローバルエッジネットワーク活用
+
+### 認証・認可詳細
+- **認証プロバイダー**: Discord OAuth 2.0（Supabase Auth 経由）
+- **セッション管理**: JWT トークン（セキュアなセッション維持）
+- **権限レベル**: Anonymous / User / Owner / Admin
+- **セキュリティ**: トークン有効期限管理、セキュアなクッキー設定
+
+### HonoX の特徴と制約
+- **高速開発**: Vite ベースの開発サーバーで高速なリロード
+- **フルスタック対応**: API とフロントエンドを統一フレームワークで開発可能
+- **Cloudflare ネイティブ**: Workers、R2、D1 とのシームレスな連携
+- **React 統合**: JSX 対応で React コンポーネントを使用可能
+- **型安全性**: TypeScript 標準対応で型安全な開発
+- **エッジ実行**: Cloudflare エッジでの高速実行
+
+## デプロイメント（HonoX）
+- 実行環境: Cloudflare Workers（HonoX 標準対応）
+- ビルドコマンド: `vite build --mode client && vite build`
+- デプロイコマンド: `wrangler deploy`
+- 設定ファイル: `wrangler.jsonc`（Cloudflare バインディング設定）
+- 環境変数管理: Wrangler 経由で環境変数設定
+- CI/CD: GitHub Actions でビルド・デプロイ自動化
+
+### HonoX 固有のデプロイメント設定
+- 静的アセット: `assets` ディレクトリに自動配置
+- サーバーコード: `main` フィールドで指定されたエントリーポイント（通常 `./dist/index.js`）
+- バインディング: R2、D1、KV などの Cloudflare サービス連携（wrangler.jsonc で定義）
+- 互換性フラグ: `nodejs_compat` で Node.js 互換性を有効化
+- 環境変数: Wrangler 経由でシークレットとして管理
+- 互換性日付: 最新の安定版を指定（例: `"compatibility_date": "2025-08-03"`）
+
+### wrangler.jsonc の設定例
+```json
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ai-uploader",
+  "main": "./dist/index.js",
+  "compatibility_date": "2025-09-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "ENVIRONMENT": "production"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ai_uploader_db",
+      "database_id": "495ad2cd-48b5-46b6-85b0-2a08a7639ea4"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "R2",
+      "bucket_name": "ai-uploader"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "RATE_LIMITER_DO",
+        "class_name": "RateLimiter"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": ["RateLimiter"]
+    }
+  ],
+  "assets": {
+    "directory": "./dist"
+  }
+}
+```
 
 ### 参考ドキュメント
-- Cloudflare R2（S3互換・マルチパート/署名URL）: `https://developers.cloudflare.com/r2/`
-- Cloudflare D1（SQLite互換・インデックス/FTS）: `https://developers.cloudflare.com/d1/`
-- Cloudflare Workers（Rate Limiting/DO/KV）: `https://developers.cloudflare.com/workers/`
-- Next.js on Cloudflare Pages: `https://developers.cloudflare.com/pages/framework-guides/deploy-a-nextjs-site/`
-- Supabase Auth Discord: `https://supabase.com/docs/guides/auth/social-login/auth-discord`
+#### フレームワーク・開発環境
+- HonoX 公式ドキュメント: `https://github.com/honojs/honox`
+- HonoX + Cloudflare Workers セットアップ: `https://github.com/honojs/honox#cloudflare-workers`
+- Hono 公式ドキュメント: `https://hono.dev/`
+
+#### Cloudflare サービス連携
+- Hono + Cloudflare Workers ガイド: `https://hono.dev/docs/getting-started/cloudflare-workers`
+- Hono + Cloudflare D1 ガイド: `https://hono.dev/docs/guides/others#cloudflare-d1`
+- Hono + Cloudflare R2 ガイド: `https://hono.dev/docs/guides/others#cloudflare-r2`
+- Hono + Durable Objects ガイド: `https://hono.dev/docs/guides/others#durable-objects`
+- Cloudflare R2 公式ドキュメント: `https://developers.cloudflare.com/r2/`
+- Cloudflare D1 公式ドキュメント: `https://developers.cloudflare.com/d1/`
+- Cloudflare Durable Objects 公式ドキュメント: `https://developers.cloudflare.com/durable-objects/`
+- Cloudflare Workers 公式ドキュメント: `https://developers.cloudflare.com/workers/`
+
+#### UI/UX・アニメーション
+- GSAP 公式ドキュメント: `https://gsap.com/docs/`
+- Tailwind CSS 公式ドキュメント: `https://tailwindcss.com/docs`
+- Headless UI ドキュメント: `https://headlessui.com/`
+
+#### その他
+- Cloudflare Workers フレームワークガイド: `https://developers.cloudflare.com/workers/frameworks/`
+- Supabase Auth Discord ガイド: `https://supabase.com/docs/guides/auth/social-login/auth-discord`
 
 ## 運用・セキュリティ
 - バックアップ: R2バケットのライフサイクル/バージョニング検討
