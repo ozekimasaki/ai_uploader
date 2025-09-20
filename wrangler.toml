@@ -20,11 +20,11 @@ binding = "RATE_LIMIT_KV"
 id = "rate_limit_kv"
 preview_id = "rate_limit_kv"
 
-# Pages Functions configuration
+# Next.js build configuration for Cloudflare Pages
 [build]
 command = "npm run build"
-cwd = "web"
-watch_dir = "web"
+cwd = "."
+watch_dir = "src"
 
 [build.upload]
 format = "service-worker"
