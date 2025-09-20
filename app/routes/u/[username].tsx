@@ -1,6 +1,6 @@
-import type { PageProps } from 'honox/server'
+import type { PropsWithChildren } from 'react'
 
-interface UserPageProps extends PageProps {
+interface UserPageProps extends PropsWithChildren {
   params: {
     username: string
   }

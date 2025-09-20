@@ -1,6 +1,6 @@
-import type { LayoutProps } from 'honox/server'
+import type { PropsWithChildren } from 'react'
 
-export default function Layout({ children }: LayoutProps) {
+export default function Layout({ children }: PropsWithChildren) {
   return (
     <html lang="ja">
       <head>
@@ -9,6 +9,8 @@ export default function Layout({ children }: LayoutProps) {
         <title>AI Uploader</title>
         <meta name="description" content="AIコンテンツ共有プラットフォーム" />
         <link rel="icon" href="/favicon.ico" />
+        <script src="https://cdn.tailwindcss.com"></script>
+        <link href="/app/styles.css" rel="stylesheet" />
       </head>
       <body className="bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
         <div id="root">

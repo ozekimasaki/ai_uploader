@@ -1,6 +1,6 @@
-import type { PageProps } from 'honox/server'
+import type { PropsWithChildren } from 'react'
 
-export default function HomePage({}: PageProps) {
+export default function HomePage({ children }: PropsWithChildren) {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
       {/* Hero Section */}

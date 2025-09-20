@@ -12,7 +12,7 @@ app.get('/status', (c) => {
   return c.json({
     status: 'running',
     version: '1.0.0',
-    environment: c.env.ENVIRONMENT || 'development',
+    environment: 'development',
     timestamp: new Date().toISOString()
   })
 })

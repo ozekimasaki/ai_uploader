@@ -1,9 +1,10 @@
 import { Hono } from 'hono'
-import { z } from '@hono/zod-validator'
-import { env, allowedFileTypes } from '../../utils/env'
-import { requireAuth } from '../../middleware/auth'
-import { ValidationError } from '../../middleware/error-handler'
-import type { PresignedUploadRequest, PresignedUploadResponse } from '../../types'
+import { zValidator } from '@hono/zod-validator'
+import { z } from 'zod'
+import { env, allowedFileTypes } from '../../../utils/env'
+import { requireAuth } from '../../../middleware/auth'
+import { ValidationError } from '../../../middleware/error-handler'
+import type { PresignedUploadRequest, PresignedUploadResponse } from '../../../types'
 
 const app = new Hono<{ Bindings: { R2: R2Bucket } }>()
 

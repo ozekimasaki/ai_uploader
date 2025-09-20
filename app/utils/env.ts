@@ -12,14 +12,14 @@ const envSchema = z.object({
 })
 
 // Parse and validate environment variables
-export const env = envSchema.parse(process.env)
+export const env = envSchema.parse(process.env || {})
 
 // Helper functions
 export const isProduction = env.ENVIRONMENT === 'production'
 export const isDevelopment = env.ENVIRONMENT === 'development'
 
 // Reserved usernames array (固定値)
-export const reservedUsernames = new Set([
+const reservedUsernamesList = [
   'admin', 'root', 'system', 'support', 'help', 'contact',
   'login', 'logout', 'signin', 'signout', 'signup', 'register',
   'oauth', 'auth', 'api', 'graphql', 'rest', 'docs', 'assets',
@@ -27,10 +27,23 @@ export const reservedUsernames = new Set([
   'upload', 'downloads', 'search', 'tags', 'tag', 'users',
   'user', 'u', 'terms', 'privacy', 'policy', 'about',
   'status', 'health', 'metrics'
-].map(username => username.toLowerCase()))
+]
+
+// Convert to lowercase manually (avoiding Array.map for Cloudflare Workers compatibility)
+const reservedUsernamesLower: string[] = []
+for (let i = 0; i < reservedUsernamesList.length; i++) {
+  reservedUsernamesLower.push(reservedUsernamesList[i].toLowerCase())
+}
+
+export const reservedUsernames = reservedUsernamesLower
+
+// Helper function to check if username is reserved
+export const isReservedUsername = (username: string) => {
+  return reservedUsernames.includes(username.toLowerCase())
+}
 
 // Allowed file types array (固定値)
-export const allowedFileTypes = new Set([
+export const allowedFileTypes = [
   'image/png',
   'image/jpeg',
   'image/webp',
@@ -40,7 +53,12 @@ export const allowedFileTypes = new Set([
   'audio/wav',
   'model/gltf-binary',
   'model/obj'
-])
+]
+
+// Helper function to check if file type is allowed
+export const isAllowedFileType = (fileType: string) => {
+  return allowedFileTypes.includes(fileType)
+}
 
 // Rate limiting config (固定値)
 export const rateLimitConfig = {

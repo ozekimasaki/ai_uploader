@@ -1,9 +1,10 @@
 import { Hono } from 'hono'
 import { createClient } from '@supabase/supabase-js'
+import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
-import { env } from '../../utils/env'
-import { authMiddleware } from '../../middleware/auth'
-import type { AuthUser } from '../../types'
+import { env } from '../../../utils/env'
+import { authMiddleware } from '../../../middleware/auth'
+import type { AuthUser } from '../../../types'
 
 const app = new Hono<{ Bindings: { DB: D1Database } }>()
 

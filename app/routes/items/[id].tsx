@@ -1,6 +1,6 @@
-import type { PageProps } from 'honox/server'
+import type { PropsWithChildren } from 'react'
 
-interface ItemPageProps extends PageProps {
+interface ItemPageProps extends PropsWithChildren {
   params: {
     id: string
   }

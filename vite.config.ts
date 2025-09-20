@@ -1,28 +1,27 @@
 import { defineConfig } from 'vite'
-import pages from '@hono/vite-cloudflare-pages'
-import devServer from '@hono/vite-dev-server'
-import adapter from '@hono/vite-cloudflare-workers'
 
-export default defineConfig(({ mode }) => {
-  if (mode === 'client') {
-    return {
-      build: {
-        rollupOptions: {
-          input: {
-            client: './app/client.ts'
-          }
-        }
-      }
+export default defineConfig({
+  build: {
+    target: 'esnext',
+    outDir: 'dist',
+    lib: {
+      entry: 'app/server.ts',
+      formats: ['es'],
+      fileName: 'index'
+    },
+    rollupOptions: {
+      external: [
+        'node:fs',
+        'node:path',
+        'node:crypto',
+        'node:stream',
+        'node:buffer',
+        'node:util',
+        'node:events',
+        'node:url',
+        'node:string_decoder',
+        'node:querystring',
+      ]
     }
-  }
-
-  return {
-    plugins: [
-      pages(),
-      devServer({
-        entry: 'app/server.ts'
-      }),
-      adapter()
-    ]
   }
 })

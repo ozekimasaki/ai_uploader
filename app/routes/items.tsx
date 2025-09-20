@@ -1,6 +1,6 @@
-import type { PageProps } from 'honox/server'
+import type { PropsWithChildren } from 'react'
 
-export default function ItemsPage({}: PageProps) {
+export default function ItemsPage({ children }: PropsWithChildren) {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}

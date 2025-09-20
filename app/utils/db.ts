@@ -37,8 +37,12 @@ export class Database {
   async getTagsByIds(ids: string[]): Promise<Tag[]> {
     if (ids.length === 0) return []
 
-    const placeholders = ids.map(() => '?').join(',')
-    const result = await this.db.prepare(`SELECT * FROM tags WHERE id IN (${placeholders})`).bind(...ids).all<Tag>()
+    const placeholders: string[] = []
+    for (let i = 0; i < ids.length; i++) {
+      placeholders.push('?')
+    }
+    const placeholdersStr = placeholders.join(',')
+    const result = await this.db.prepare(`SELECT * FROM tags WHERE id IN (${placeholdersStr})`).bind(...ids).all<Tag>()
     return result.results || []
   }
 
@@ -157,16 +161,21 @@ export class Database {
 
     const itemsResult = await this.db.prepare(itemsQuery).bind(...bindValues, limit, offset).all<Item & { username?: string; displayName?: string; avatarUrl?: string }>()
 
-    const items: Item[] = (itemsResult.results || []).map(item => ({
-      ...item,
-      owner: item.username ? {
-        id: item.ownerUserId,
-        username: item.username,
-        displayName: item.displayName,
-        avatarUrl: item.avatarUrl,
-        createdAt: item.createdAt
-      } : undefined
-    }))
+    const items: Item[] = []
+    const results = itemsResult.results || []
+    for (let i = 0; i < results.length; i++) {
+      const item = results[i]
+      items.push({
+        ...item,
+        owner: item.username ? {
+          id: item.ownerUserId,
+          username: item.username,
+          displayName: item.displayName,
+          avatarUrl: item.avatarUrl,
+          createdAt: item.createdAt
+        } : undefined
+      })
+    }
 
     const meta: PaginationMeta = {
       page,
@@ -199,10 +208,13 @@ export class Database {
 
     // Add tags
     if (tags.length > 0) {
-      const tagInserts = tags.map(tagId => `('${id}', '${tagId}')`).join(',')
+      const tagInserts: string[] = []
+      for (let i = 0; i < tags.length; i++) {
+        tagInserts.push(`('${id}', '${tags[i]}')`)
+      }
       await this.db.prepare(`
         INSERT OR IGNORE INTO item_tags (item_id, tag_id)
-        VALUES ${tagInserts}
+        VALUES ${tagInserts.join(',')}
       `).run()
     }
 

@@ -1,9 +1,10 @@
 import { Hono } from 'hono'
-import { z } from '@hono/zod-validator'
-import { requireAuth } from '../../middleware/auth'
-import { Database } from '../../utils/db'
-import { ValidationError, NotFoundError } from '../../middleware/error-handler'
-import type { CreateItemRequest, UpdateItemRequest, ItemsQuery } from '../../types'
+import { zValidator } from '@hono/zod-validator'
+import { z } from 'zod'
+import { requireAuth } from '../../../middleware/auth'
+import { Database } from '../../../utils/db'
+import { ValidationError, NotFoundError } from '../../../middleware/error-handler'
+import type { CreateItemRequest, UpdateItemRequest, ItemsQuery } from '../../../types'
 
 const app = new Hono<{ Bindings: { DB: D1Database } }>()
 

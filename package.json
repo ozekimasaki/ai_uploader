@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite dev",
-    "build": "vite build --mode client && vite build",
+    "build": "vite build",
     "preview": "wrangler dev",
     "deploy": "wrangler deploy",
     "db:migrate": "wrangler d1 migrations apply ai_uploader_db",
@@ -20,7 +20,6 @@
     "@hono/zod-validator": "^0.2.2",
     "@supabase/supabase-js": "^2.45.4",
     "hono": "^4.6.5",
-    "honox": "^0.1.24",
     "zod": "^3.23.8"
   },
   "devDependencies": {
@@ -36,7 +35,7 @@
     "typescript": "^5.6.3",
     "vite": "^5.4.11",
     "vitest": "^2.1.4",
-    "wrangler": "^3.86.0"
+    "wrangler": "^4.38.0"
   },
   "keywords": [
     "ai",

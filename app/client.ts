@@ -1,3 +1,1 @@
-import { createClient } from 'honox/client'
-
-createClient()
+// Client-side initialization (empty for now)
