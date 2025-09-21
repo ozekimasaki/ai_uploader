@@ -1,49 +1,39 @@
 {
-  "name": "ai-uploader",
+  "name": "ai_uploader",
   "version": "1.0.0",
-  "description": "AIコンテンツアップローダー",
-  "type": "module",
+  "description": "",
+  "main": "index.js",
   "scripts": {
-    "dev": "vite dev",
-    "build": "vite build",
-    "preview": "wrangler dev",
+    "dev:api": "wrangler dev",
+    "dev:web": "vite",
+    "build:web": "vite build",
     "deploy": "wrangler deploy",
-    "db:migrate": "wrangler d1 migrations apply ai_uploader_db",
-    "db:generate": "wrangler d1 migrations create",
-    "db:list": "wrangler d1 migrations list",
-    "typecheck": "tsc --noEmit",
-    "lint": "eslint . --ext .ts,.tsx,.js,.jsx",
-    "format": "prettier --write ."
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ozekimasaki/ai_uploader.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/ozekimasaki/ai_uploader/issues"
+  },
+  "homepage": "https://github.com/ozekimasaki/ai_uploader#readme",
   "dependencies": {
-    "@cloudflare/workers-types": "^4.20240912.0",
-    "@hono/zod-validator": "^0.2.2",
-    "@supabase/supabase-js": "^2.45.4",
-    "hono": "^4.6.5",
-    "zod": "^3.23.8"
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.5.14",
-    "@tailwindcss/typography": "^0.5.15",
-    "@types/node": "^22.8.6",
-    "autoprefixer": "^10.4.20",
-    "eslint": "^9.14.0",
-    "eslint-config-prettier": "^9.1.0",
-    "postcss": "^8.5.0",
-    "prettier": "^3.3.3",
-    "tailwindcss": "^3.4.14",
-    "typescript": "^5.6.3",
-    "vite": "^5.4.11",
-    "vitest": "^2.1.4",
+    "@types/node": "^24.5.2",
+    "@vitejs/plugin-react-swc": "^4.1.0",
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.1.13",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.6",
     "wrangler": "^4.38.0"
-  },
-  "keywords": [
-    "ai",
-    "uploader",
-    "cloudflare",
-    "hono",
-    "honox"
-  ],
-  "author": "",
-  "license": "MIT"
+  }
 }

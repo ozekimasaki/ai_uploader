@@ -103,14 +103,14 @@ D1設計メモ
 - レート制御はIP + userId + itemIdの複合キーで公平性を担保。
 - 既定TTL=15分。大容量DL向けに最大120分までの延長を許容（環境変数）。
 
-## API / ルーティング（HonoX）
+## API / ルーティング（Cloudflare Workers 単体）
 - 推奨ルーティング（最適案）
 	- `GET /` … 新着/人気一覧（`/items`のエイリアス）
 	- `GET /items` … 一覧（page, q, tag, category, sort）
 	- `GET /items/[id]` … 詳細（SEOはタイトルをmetaに反映。slugは任意）
 	- `GET /u/[username]` … ユーザーページ
 	- `GET /upload` … アップロード画面（要ログイン）
-- API（Hono ベース）
+- API（Cloudflare Workers）
 	- `POST /api/upload/presign` … R2用署名URL/マルチパート情報の発行（要ログイン）
 	- `POST /api/items` … メタデータ作成（要ログイン）
 	- `GET /api/items` … 一覧取得（フィルタ/並び替え/ページング）
@@ -120,14 +120,12 @@ D1設計メモ
 	- `POST /api/items/[id]/download-url` … 署名URL発行（要ログイン＋レート制御）
 	- `POST /api/reports` … 通報作成（ログイン任意）
 
-### HonoX 固有の機能
-- ファイルベースのルーティング（`app/routes/` 配下のファイル）
-- レイアウト機能（`_layout.tsx` で共通レイアウト定義）
-- ミドルウェア対応（認証、レート制限等）
-- SSR/SSG 対応（Static Site Generation）
-- 静的アセットの自動処理
-- クライアントサイドスクリプト対応
-- 環境別ビルド（dev/production）
+### Workers / ルーティングのポイント
+- fetch ハンドラで `new URL(request.url)` により経路判定
+- `URLPattern` または正規表現でパスマッチング
+- 認証・レート制限は関数分割で共通化（Durable Objects併用可）
+- SSR/SSG はMVPでは対象外。フロントは Vite ビルドの SPA を配信
+- 静的アセットは Vite 出力（`dist`）を Workers の `assets.directory` として配信
 
 ルーティング指針（回答）
 - 詳細ページは「IDを正」とし、`/items/[id]` を正規URLにするのが最適。タイトルはSEOで利用。
@@ -161,34 +159,23 @@ D1設計メモ
 - Promptの扱い: 投稿主が任意で公開可。公開時は他者閲覧可能（再利用可否は将来設定）
 
 ## UI/UX デザイン
-### デザインシステム
-- **CSS フレームワーク**: Tailwind CSS（ユーティリティファースト、レスポンシブ対応）
-- **アニメーション**: GSAP（GreenSock Animation Platform）で要所の立体的なアニメーション表現
-- **カラーパレット**: ダークモード対応、アクセシビリティ考慮の配色
-- **タイポグラフィ**: システムフォントを基調とした可読性の高いフォント設定
-
-### アニメーション設計
-- **ページ遷移**: GSAP Timeline による滑らかな画面遷移
-- **要素出現**: ScrollTrigger によるスクロール連動アニメーション
-- **ホバー効果**: 立体的なボタン・カードのホバーアニメーション
-- **ローディング**: スケルトンスクリーンとプログレスアニメーション
-- **エラーハンドリング**: ユーザーフレンドリーなエラー状態のアニメーション
-
-### レスポンシブデザイン
-- **モバイルファースト**: タブレット・デスクトップへの段階的拡張
-- **グリッドシステム**: CSS Grid と Flexbox の組み合わせ
-- **タッチフレンドリー**: 適切なタッチターゲットサイズの確保
-- **パフォーマンス**: アニメーションのGPUアクセラレーション活用
+### デザイン方針
+- Tailwind CSS（ダークモード対応）
+- GSAPは必要箇所のみ最小限
+- 可読性重視のタイポグラフィ
+- モバイルファースト。Grid/Flex活用
+- 軽量・高速（必要時のみGPUアクセラレーション）
 
 ## 技術構成
-- フレームワーク: HonoX（Hono ベースのメタフレームワーク、TypeScript 標準対応）
-- 実行基盤: Cloudflare Workers（HonoX 標準対応）
+- フロントエンド: Vite 7 + React（TypeScript）
+- バックエンド/API: Cloudflare Workers（素のfetch）
+- 実行基盤: Cloudflare Workers
 - 認証: Supabase Auth（Discord OAuth、JWT トークン管理）
 - ストレージ: Cloudflare R2（S3互換API、bucket: ai-uploader、2GB対応マルチパートアップロード）
 - メタデータDB: Cloudflare D1（SQLite互換、データベース: ai_uploader_db / ID: 495ad2cd-48b5-46b6-85b0-2a08a7639ea4、外部キー制約・インデックス対応）
 - レート制御: Cloudflare Workers + Durable Objects（IP・ユーザー・アイテム複合キーによる公平なレート制限、Durable Objects による分散ロック・状態管理）
 - ログ/メトリクス: Cloudflare Logs/Analytics（リアルタイムログ・分析、Workers Logs・Tail Workers 対応）
-- ビルドツール: Vite 7（HonoX 統合、高速開発サーバー）
+- ビルドツール: Vite 7（高速開発サーバー）
 
 ### フロントエンド技術
 - **スタイリング**: Tailwind CSS（ユーティリティファースト、レスポンシブ対応）
@@ -208,36 +195,77 @@ D1設計メモ
 - **権限レベル**: Anonymous / User / Owner / Admin
 - **セキュリティ**: トークン有効期限管理、セキュアなクッキー設定
 
-### HonoX の特徴と制約
-- **高速開発**: Vite ベースの開発サーバーで高速なリロード
-- **フルスタック対応**: API とフロントエンドを統一フレームワークで開発可能
+### Workers + Vite の特徴と制約
+- **高速開発**: Vite の開発サーバーで高速なリロード
+- **フルスタック**: Workers（API）と Vite（フロント）を同一レポで開発
 - **Cloudflare ネイティブ**: Workers、R2、D1 とのシームレスな連携
-- **React 統合**: JSX 対応で React コンポーネントを使用可能
+- **React**: JSX 対応で React コンポーネントを使用可能
 - **型安全性**: TypeScript 標準対応で型安全な開発
 - **エッジ実行**: Cloudflare エッジでの高速実行
 
-## デプロイメント（HonoX）
-- 実行環境: Cloudflare Workers（HonoX 標準対応）
-- ビルドコマンド: `vite build --mode client && vite build`
+### 環境変数設定
+アプリの機密は `wrangler secret` で管理（Gitに含めない）。
+
+- 必須
+	- SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY
+- 構成・動作
+	- ENVIRONMENT（development|production）
+	- DEFAULT_DOWNLOAD_TTL_MINUTES=15 / MAX_DOWNLOAD_TTL_MINUTES=120
+	- RATE_LIMIT_DOWNLOAD_PER_MINUTE=10 / MAX_FILE_SIZE_MB=2048
+	- ALLOWED_FILE_TYPES=png,jpg,jpeg,webp,mp4,webm,mp3,wav,glb,obj
+- レート制限
+	- RATE_LIMIT_UPLOAD_PER_HOUR=50
+	- RATE_LIMIT_DOWNLOAD_PER_USER_PER_MINUTE=5
+	- RATE_LIMIT_GLOBAL_DOWNLOAD_PER_MINUTE=100
+
+- 管理方法（例）
+```bash
+wrangler secret put SUPABASE_URL
+wrangler secret list
+# dev: wrangler dev / prod: wrangler deploy --env production
+```
+
+- セキュリティ
+	- シークレットは必ず`wrangler secret`
+	- 環境分離・キーの定期ローテーション
+	- 最小権限・秘密情報をログ出力しない
+ 
+備考: Discord OAuth の `CLIENT_ID/SECRET` はSupabase Auth側で管理するため、本Workerでは不要。
+
+## デプロイメント（Vite + Cloudflare Workers）
+- 実行環境: Cloudflare Workers
+- フロントエンド: `vite build` で `dist` を生成（静的アセット）
 - デプロイコマンド: `wrangler deploy`
 - 設定ファイル: `wrangler.jsonc`（Cloudflare バインディング設定）
+- ローカル開発: `vite dev`（SPA）と `wrangler dev`（API）を併用
 - 環境変数管理: Wrangler 経由で環境変数設定
 - CI/CD: GitHub Actions でビルド・デプロイ自動化
 
-### HonoX 固有のデプロイメント設定
-- 静的アセット: `assets` ディレクトリに自動配置
-- サーバーコード: `main` フィールドで指定されたエントリーポイント（通常 `./dist/index.js`）
-- バインディング: R2、D1、KV などの Cloudflare サービス連携（wrangler.jsonc で定義）
-- 互換性フラグ: `nodejs_compat` で Node.js 互換性を有効化
-- 環境変数: Wrangler 経由でシークレットとして管理
-- 互換性日付: 最新の安定版を指定（例: `"compatibility_date": "2025-08-03"`）
+### Workers + 静的アセット設定（要点）
+- 静的: Vite `dist` を `assets.directory` で配信
+- エントリ: `main` は `src/worker.ts`
+- 連携: R2/D1/KV を wrangler.jsonc でバインド
+- 互換: `nodejs_compat` を有効化
+- 互換日: 安定版を指定（例: `2025-08-03`）
+
+### 環境別設定
+- **開発環境**: `wrangler dev` でローカル実行（環境変数は `.dev.vars` または `wrangler secret` で管理）
+- **ステージング環境**: `wrangler deploy --env staging` でステージング環境へのデプロイ
+- **本番環境**: `wrangler deploy` で本番環境へのデプロイ（環境変数は `wrangler secret put --env production` で設定）
+
+### 環境変数の設定フロー
+1. 開発環境用の環境変数を `wrangler secret put` で設定
+2. `.dev.vars` ファイルで開発用のデフォルト値を設定（Git管理対象外）
+3. 本番環境用の環境変数を `wrangler secret put` で設定
+4. `wrangler secret list` で設定確認
+5. アプリケーション起動時の動作確認
 
 ### wrangler.jsonc の設定例
 ```json
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "ai-uploader",
-  "main": "./dist/index.js",
+  "main": "src/worker.ts",
   "compatibility_date": "2025-09-20",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
@@ -276,30 +304,15 @@ D1設計メモ
 }
 ```
 
-### 参考ドキュメント
-#### フレームワーク・開発環境
-- HonoX 公式ドキュメント: `https://github.com/honojs/honox`
-- HonoX + Cloudflare Workers セットアップ: `https://github.com/honojs/honox#cloudflare-workers`
-- Hono 公式ドキュメント: `https://hono.dev/`
-
-#### Cloudflare サービス連携
-- Hono + Cloudflare Workers ガイド: `https://hono.dev/docs/getting-started/cloudflare-workers`
-- Hono + Cloudflare D1 ガイド: `https://hono.dev/docs/guides/others#cloudflare-d1`
-- Hono + Cloudflare R2 ガイド: `https://hono.dev/docs/guides/others#cloudflare-r2`
-- Hono + Durable Objects ガイド: `https://hono.dev/docs/guides/others#durable-objects`
-- Cloudflare R2 公式ドキュメント: `https://developers.cloudflare.com/r2/`
-- Cloudflare D1 公式ドキュメント: `https://developers.cloudflare.com/d1/`
-- Cloudflare Durable Objects 公式ドキュメント: `https://developers.cloudflare.com/durable-objects/`
-- Cloudflare Workers 公式ドキュメント: `https://developers.cloudflare.com/workers/`
-
-#### UI/UX・アニメーション
-- GSAP 公式ドキュメント: `https://gsap.com/docs/`
-- Tailwind CSS 公式ドキュメント: `https://tailwindcss.com/docs`
-- Headless UI ドキュメント: `https://headlessui.com/`
-
-#### その他
-- Cloudflare Workers フレームワークガイド: `https://developers.cloudflare.com/workers/frameworks/`
-- Supabase Auth Discord ガイド: `https://supabase.com/docs/guides/auth/social-login/auth-discord`
+### 参考
+- Vite: `https://vitejs.dev/`
+- Cloudflare Workers: `https://developers.cloudflare.com/workers/`
+- R2: `https://developers.cloudflare.com/r2/`
+- D1: `https://developers.cloudflare.com/d1/`
+- Durable Objects: `https://developers.cloudflare.com/durable-objects/`
+- Tailwind CSS: `https://tailwindcss.com/docs`
+- GSAP: `https://gsap.com/docs/`
+- Supabase Discord Auth: `https://supabase.com/docs/guides/auth/social-login/auth-discord`
 
 ## 運用・セキュリティ
 - バックアップ: R2バケットのライフサイクル/バージョニング検討
