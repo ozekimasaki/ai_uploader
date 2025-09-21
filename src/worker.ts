@@ -89,14 +89,7 @@ export default {
       return env.ASSETS.fetch(new Request(indexUrl.toString(), request));
     }
 
-    // Generic SPA fallback: any non-API HTML request gets index.html without redirect
-    if (request.method === 'GET' && !url.pathname.startsWith('/api/')) {
-      const accept = request.headers.get('accept') || '';
-      if (accept.includes('text/html') || accept.includes('*/*')) {
-        const indexUrl = new URL('/index.html', url.origin);
-        return env.ASSETS.fetch(new Request(indexUrl.toString(), request));
-      }
-    }
+    // Note: Do NOT preempt assets. Try static file first, then fallback to SPA index.html
 
     // SPA routes: serve index.html directly
     if (request.method === 'GET' && (url.pathname.startsWith('/items') || url.pathname.startsWith('/upload') || url.pathname.startsWith('/u/'))) {
@@ -112,11 +105,16 @@ export default {
     // Fallback to static assets (Vite dist). If 404, serve index.html for SPA routing
     try {
       const assetRes = await env.ASSETS.fetch(request);
-      if (assetRes.status === 404 && request.method === 'GET') {
-        const indexUrl = new URL('/index.html', url.origin);
-        return env.ASSETS.fetch(new Request(indexUrl.toString(), request));
+      if (assetRes.status !== 404) return assetRes;
+      // 404 from assets: if HTML navigation request, serve index.html for SPA routing
+      if (request.method === 'GET') {
+        const accept = request.headers.get('accept') || '';
+        if (accept.includes('text/html')) {
+          const indexUrl = new URL('/index.html', url.origin);
+          return env.ASSETS.fetch(new Request(indexUrl.toString(), request));
+        }
       }
-      return assetRes;
+      return assetRes; // non-HTML 404
     } catch (e) {
       console.error('assets fetch failed', e);
       const indexUrl = new URL('/index.html', url.origin);
