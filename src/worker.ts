@@ -86,6 +86,7 @@ export default {
 
 import { requireUser, getUserOrNull } from './auth';
 import { listPublicItems, VALID_CATEGORIES, type Category, createItem, ensureUser, getItemById, publishItem, deleteItem } from './db';
+export { RateLimiter } from './rateLimiter';
 import { presignUrl, createMultipartUpload, buildUploadPartUrl, completeMultipartUpload } from './r2_signing';
 
 async function handleApi(request: Request, env: EnvBindings, ctx: ExecutionContext): Promise<Response> {
