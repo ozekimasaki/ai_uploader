@@ -45,6 +45,15 @@
   "assets": {
     "directory": "./web/dist"
   }
+  ,
+  "env": {
+    "production": {
+      "vars": { "ENVIRONMENT": "production" },
+      "routes": [
+        { "pattern": "uploader.umaibo.dev/*", "custom_domain": true }
+      ]
+    }
+  }
 }
 
 
