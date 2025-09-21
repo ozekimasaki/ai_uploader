@@ -14,10 +14,7 @@
     "RATE_LIMIT_GLOBAL_DOWNLOAD_PER_MINUTE": 100,
     "MAX_FILE_SIZE_MB": 2048,
     "ALLOWED_FILE_TYPES": "png,jpg,jpeg,webp,mp4,webm,mp3,wav,glb,obj",
-    "R2_BUCKET": "ai-uploader",
-    "R2_ACCOUNT_ID": "",
-    "R2_ACCESS_KEY_ID": "",
-    "R2_SECRET_ACCESS_KEY": ""
+    "R2_BUCKET": "ai-uploader"
   },
   "d1_databases": [
     {
@@ -47,14 +44,48 @@
     }
   ],
   "assets": {
-    "directory": "./web/dist"
+    "directory": "./web/dist",
+    "binding": "ASSETS"
   }
   ,
   "env": {
     "production": {
-      "vars": { "ENVIRONMENT": "production" },
-      "routes": [
-        { "pattern": "uploader.umaibo.dev/*", "custom_domain": true }
+      "name": "ai-uploader",
+      "vars": {
+        "ENVIRONMENT": "production",
+        "DEFAULT_DOWNLOAD_TTL_MINUTES": 15,
+        "MAX_DOWNLOAD_TTL_MINUTES": 120,
+        "RATE_LIMIT_DOWNLOAD_PER_MINUTE": 10,
+        "RATE_LIMIT_UPLOAD_PER_HOUR": 50,
+        "RATE_LIMIT_DOWNLOAD_PER_USER_PER_MINUTE": 5,
+        "RATE_LIMIT_GLOBAL_DOWNLOAD_PER_MINUTE": 100,
+        "MAX_FILE_SIZE_MB": 2048,
+        "ALLOWED_FILE_TYPES": "png,jpg,jpeg,webp,mp4,webm,mp3,wav,glb,obj",
+        "R2_BUCKET": "ai-uploader"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "ai_uploader_db",
+          "database_id": "495ad2cd-48b5-46b6-85b0-2a08a7639ea4"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "R2",
+          "bucket_name": "ai-uploader"
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "RATE_LIMITER_DO",
+            "class_name": "RateLimiter"
+          }
+        ]
+      },
+      "domains": [
+        "uploader.umaibo.dev"
       ]
     }
   }

@@ -53,12 +53,12 @@ function buildPath(bucket: string, key: string): string {
   return `/${encodeURIComponent(bucket)}/${safeKey}`;
 }
 
-function canonicalQuery(params: Record<string, string | number | undefined>): string {
+function canonicalQuery(params: Record<string, string | number | undefined | null>): string {
   const pairs = Object.entries(params)
-    .filter(([, v]) => v !== undefined)
-    .map(([k, v]) => [encodeURIComponent(k), encodeURIComponent(String(v))] as const)
+    .filter(([, v]) => v !== undefined && v !== null)
+    .map(([k, v]) => [encodeURIComponent(k), v === '' ? '' : encodeURIComponent(String(v))] as const)
     .sort(([a], [b]) => a.localeCompare(b));
-  return pairs.map(([k, v]) => `${k}=${v}`).join('&');
+  return pairs.map(([k, v]) => `${k}=${v ?? ''}`).join('&');
 }
 
 function toHex(bytes: ArrayBuffer): string {
@@ -89,7 +89,7 @@ export async function presignUrl(
     'X-Amz-Expires': Math.min(604800, Math.max(1, Math.floor(opts.expiresSeconds))),
     'X-Amz-SignedHeaders': 'host',
   };
-  const qsAll = { ...qsBase, ...(opts.subresource || {}) };
+  const qsAll = { ...qsBase, ...(opts.subresource || {}) } as Record<string, string | number | ''>;
   const qsCanonical = canonicalQuery(qsAll);
 
   const canonicalHeaders = `host:${host}\n`;
@@ -116,27 +116,57 @@ export async function presignUrl(
   const signingKey = await getSigningKey(secretAccessKey, date);
   const signature = toHex(await hmac(signingKey, stringToSign));
 
-  const url = new URL(`https://${host}${path}`);
-  for (const [k, v] of Object.entries(qsAll)) url.searchParams.set(k, String(v));
-  url.searchParams.set('X-Amz-Signature', signature);
-  return url.toString();
+  const base = `https://${host}${path}`;
+  const sep = qsCanonical.length ? '&' : '';
+  const finalQs = qsCanonical + `${sep}X-Amz-Signature=${signature}`;
+  return `${base}?${finalQs}`;
 }
 
 export async function createMultipartUpload(creds: R2S3Credentials, bucket: string, key: string, contentType?: string) {
-  // Server-side: initiate multipart upload by calling R2 S3 API
-  // We will sign a POST ?uploads request and perform it here to obtain uploadId
-  const url = await presignUrl(creds, {
-    method: 'POST',
-    bucket,
-    key,
-    expiresSeconds: 60, // short-lived for init
-    subresource: { uploads: '' },
-  });
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: contentType ? { 'content-type': contentType } : undefined,
-  });
-  if (!res.ok) throw new Error(`CreateMultipartUpload failed: ${res.status}`);
+  // Server-side: use header-signed request for CreateMultipartUpload to avoid presign quirks
+  const host = buildHost(creds.accountId);
+  const { date, amzDate } = toDateTime(new Date());
+  const path = buildPath(bucket, key);
+
+  const qs = canonicalQuery({ uploads: '' });
+  const payloadHash = 'UNSIGNED-PAYLOAD';
+  const canonicalHeaders = `host:${host}\n` + `x-amz-content-sha256:${payloadHash}\n` + `x-amz-date:${amzDate}\n`;
+  const signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
+  const canonicalRequest = [
+    'POST',
+    path,
+    qs,
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash,
+  ].join('\n');
+
+  const scope = `${date}/${REGION}/${SERVICE}/aws4_request`;
+  const stringToSign = [
+    'AWS4-HMAC-SHA256',
+    amzDate,
+    scope,
+    await sha256Hex(canonicalRequest),
+  ].join('\n');
+  const signingKey = await getSigningKey(creds.secretAccessKey, date);
+  const signature = toHex(await hmac(signingKey, stringToSign));
+
+  const credential = `${creds.accessKeyId}/${date}/${REGION}/${SERVICE}/aws4_request`;
+  const authorization = `AWS4-HMAC-SHA256 Credential=${credential}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+
+  const url = `https://${host}${path}?${qs}`;
+  const headers: Record<string, string> = {
+    'x-amz-date': amzDate,
+    'x-amz-content-sha256': payloadHash,
+    'authorization': authorization,
+  };
+  if (contentType) headers['content-type'] = contentType;
+
+  const res = await fetch(url, { method: 'POST', headers });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`CreateMultipartUpload failed: ${res.status} ${text}`);
+  }
   const text = await res.text();
   // very small XML parser to extract <UploadId>...</UploadId>
   const m = /<UploadId>([^<]+)<\/UploadId>/.exec(text);
@@ -161,20 +191,93 @@ export async function completeMultipartUpload(
   uploadId: string,
   parts: Array<{ partNumber: number; etag: string }>
 ) {
-  const url = await presignUrl(creds, {
-    method: 'POST',
-    bucket,
-    key,
-    expiresSeconds: 60,
-    subresource: { uploadId },
-  });
+  const host = buildHost(creds.accountId);
+  const { date, amzDate } = toDateTime(new Date());
+  const path = buildPath(bucket, key);
+  const qs = canonicalQuery({ uploadId });
+  const payloadHash = 'UNSIGNED-PAYLOAD';
+  const canonicalHeaders = `host:${host}\n` + `x-amz-content-sha256:${payloadHash}\n` + `x-amz-date:${amzDate}\n`;
+  const signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
+  const canonicalRequest = [
+    'POST',
+    path,
+    qs,
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash,
+  ].join('\n');
+
+  const scope = `${date}/${REGION}/${SERVICE}/aws4_request`;
+  const stringToSign = [
+    'AWS4-HMAC-SHA256',
+    amzDate,
+    scope,
+    await sha256Hex(canonicalRequest),
+  ].join('\n');
+  const signingKey = await getSigningKey(creds.secretAccessKey, date);
+  const signature = toHex(await hmac(signingKey, stringToSign));
+  const credential = `${creds.accessKeyId}/${date}/${REGION}/${SERVICE}/aws4_request`;
+  const authorization = `AWS4-HMAC-SHA256 Credential=${credential}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+
+  const url = `https://${host}${path}?${qs}`;
+  const headers: Record<string, string> = {
+    'x-amz-date': amzDate,
+    'x-amz-content-sha256': payloadHash,
+    'authorization': authorization,
+    'content-type': 'application/xml',
+  };
   const body = `<?xml version="1.0" encoding="UTF-8"?><CompleteMultipartUpload>${parts
     .sort((a, b) => a.partNumber - b.partNumber)
     .map(p => `<Part><PartNumber>${p.partNumber}</PartNumber><ETag>${p.etag}</ETag></Part>`)
     .join('')}</CompleteMultipartUpload>`;
-  const res = await fetch(url, { method: 'POST', body, headers: { 'content-type': 'application/xml' } });
+  const res = await fetch(url, { method: 'POST', headers, body });
   if (!res.ok) throw new Error(`CompleteMultipartUpload failed: ${res.status}`);
   return await res.text();
+}
+
+export async function signUploadPartHeaders(
+  creds: R2S3Credentials,
+  bucket: string,
+  key: string,
+  uploadId: string,
+  partNumber: number,
+) {
+  const host = buildHost(creds.accountId);
+  const { date, amzDate } = toDateTime(new Date());
+  const path = buildPath(bucket, key);
+  const qs = canonicalQuery({ partNumber, uploadId });
+
+  const payloadHash = 'UNSIGNED-PAYLOAD';
+  const canonicalHeaders = `host:${host}\n` + `x-amz-content-sha256:${payloadHash}\n` + `x-amz-date:${amzDate}\n`;
+  const signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
+  const canonicalRequest = [
+    'PUT',
+    path,
+    qs,
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash,
+  ].join('\n');
+
+  const scope = `${date}/${REGION}/${SERVICE}/aws4_request`;
+  const stringToSign = [
+    'AWS4-HMAC-SHA256',
+    amzDate,
+    scope,
+    await sha256Hex(canonicalRequest),
+  ].join('\n');
+  const signingKey = await getSigningKey(creds.secretAccessKey, date);
+  const signature = toHex(await hmac(signingKey, stringToSign));
+  const credential = `${creds.accessKeyId}/${date}/${REGION}/${SERVICE}/aws4_request`;
+  const authorization = `AWS4-HMAC-SHA256 Credential=${credential}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+
+  const url = `https://${host}${path}?${qs}`;
+  const headers: Record<string, string> = {
+    'x-amz-date': amzDate,
+    'x-amz-content-sha256': payloadHash,
+    'authorization': authorization,
+  };
+  return { url, headers };
 }
 
 

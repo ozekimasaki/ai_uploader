@@ -23,8 +23,10 @@
   },
   "homepage": "https://github.com/ozekimasaki/ai_uploader#readme",
   "dependencies": {
+    "@supabase/supabase-js": "^2.57.4",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1"
+    "react-dom": "^19.1.1",
+    "react-router-dom": "^7.9.1"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250920.0",

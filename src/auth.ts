@@ -39,7 +39,7 @@ function extractBearer(request: Request): string | null {
   return m ? m[1] : null;
 }
 
-export async function getUserOrNull(request: Request, env: { SUPABASE_URL: string }): Promise<AuthUser | null> {
+export async function getUserOrNull(request: Request, env: { SUPABASE_URL: string; SUPABASE_ANON_KEY?: string }): Promise<AuthUser | null> {
   const token = extractBearer(request);
   if (!token) return null;
   try {
@@ -52,7 +52,22 @@ export async function getUserOrNull(request: Request, env: { SUPABASE_URL: strin
     if (!sub) return null;
     return { id: sub };
   } catch {
-    return null;
+    // Fallback: call Supabase Auth user endpoint to validate token (works with HS256 projects)
+    try {
+      const res = await fetch(new URL('/auth/v1/user', env.SUPABASE_URL).toString(), {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          apikey: env.SUPABASE_ANON_KEY || '',
+          accept: 'application/json',
+        },
+      });
+      if (!res.ok) return null;
+      const data = await res.json<any>();
+      const id = data?.id || data?.user?.id;
+      return id ? { id: String(id) } : null;
+    } catch {
+      return null;
+    }
   }
 }
 
