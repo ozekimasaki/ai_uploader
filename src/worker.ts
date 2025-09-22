@@ -481,9 +481,9 @@ export default {
         const id = m[1];
         try {
           await ensureTables(env);
-          const row: any = await env.DB.prepare(`SELECT id, ownerUserId, owner_user_id FROM items WHERE id = ? LIMIT 1`).bind(id).first();
+          const row: any = await env.DB.prepare(`SELECT * FROM items WHERE id = ? LIMIT 1`).bind(id).first();
           if (!row) return new Response(JSON.stringify({ error: 'not_found' }), { status: 404, headers: { 'content-type': 'application/json' } });
-          const owner = row.ownerUserId ?? row.owner_user_id ?? '';
+          const owner = row.ownerUserId ?? row.OWNERUSERID ?? row.owner_user_id ?? row.OWNER_USER_ID ?? '';
           const uid = String((authed as any)?.id || '');
           if (!uid || owner !== uid) {
             return new Response(JSON.stringify({ error: 'forbidden' }), { status: 403, headers: { 'content-type': 'application/json' } });
@@ -514,14 +514,14 @@ export default {
         const id = m[1];
         try {
           await ensureTables(env);
-          const row: any = await env.DB.prepare(`SELECT id, ownerUserId, owner_user_id, visibility, file_key, fileKey, original_filename, originalFilename FROM items WHERE id = ? LIMIT 1`).bind(id).first();
+          const row: any = await env.DB.prepare(`SELECT * FROM items WHERE id = ? LIMIT 1`).bind(id).first();
           if (!row) return new Response(JSON.stringify({ error: 'not_found' }), { status: 404, headers: { 'content-type': 'application/json' } });
-          const owner = row.ownerUserId ?? row.owner_user_id ?? '';
-          const visibility = String(row.visibility ?? 'public');
+          const owner = row.ownerUserId ?? row.OWNERUSERID ?? row.owner_user_id ?? row.OWNER_USER_ID ?? '';
+          const visibility = String(row.visibility ?? row.VISIBILITY ?? 'public');
           const canDownload = visibility === 'public' || (owner && owner === userId);
           if (!canDownload) return new Response(JSON.stringify({ error: 'forbidden' }), { status: 403, headers: { 'content-type': 'application/json' } });
 
-          const fileKey = row.file_key ?? row.fileKey ?? '';
+          const fileKey = row.file_key ?? row.fileKey ?? row.FILE_KEY ?? '';
           if (!fileKey) return new Response(JSON.stringify({ error: 'bad_item' }), { status: 400, headers: { 'content-type': 'application/json' } });
 
           // rate limit: per IP+user+item
