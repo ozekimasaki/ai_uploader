@@ -4,13 +4,25 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AI Uploader</title>
+    <link rel="stylesheet" href="/app.css" />
   </head>
   <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-    <base href="/" />
-    <link rel="stylesheet" href="/src/index.css" />
+    <header class="border-b border-gray-200 h-14 flex items-center">
+      <div class="max-w-[980px] mx-auto px-4 w-full flex justify-between">
+        <a href="/" class="font-semibold text-gray-900">AI Uploader</a>
+        <nav class="flex gap-3">
+          <a href="/items" class="text-blue-600">一覧</a>
+          <a href="/upload" class="text-blue-600">アップロード</a>
+        </nav>
+      </div>
+    </header>
+    <main class="max-w-[980px] mx-auto px-4 py-4">
+      <h1 class="text-lg font-semibold">AI Uploader</h1>
+      <p class="text-gray-500 text-sm">このトップは静的です。/items, /upload 等はWorkersがHTMLを返します。</p>
+    </main>
+    <footer class="border-t border-gray-200">
+      <div class="max-w-[980px] mx-auto px-4 py-3 text-xs text-gray-500">© <span id="y"></span> AI Uploader</div>
+    </footer>
+    <script>document.getElementById('y').textContent=String(new Date().getFullYear());</script>
   </body>
   </html>
-
-
