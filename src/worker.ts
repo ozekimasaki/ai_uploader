@@ -14,10 +14,27 @@ export interface Env {
   R2: R2Bucket;
   DB: D1Database;
   ASSETS: Fetcher;
+  RATE_LIMITER_DO: DurableObjectNamespace;
 }
 
 const html = (s: string, status = 200) => new Response(s, { status, headers: { 'content-type': 'text/html; charset=utf-8' } });
-function layout(title: string, body: string): string {
+function renderHeaderHtml(isLoggedIn: boolean): string {
+  if (isLoggedIn) {
+    return `<a href="/items" class="text-blue-600">一覧</a>
+            <a href="/upload" class="text-blue-600">アップロード</a>
+            <a href="/logout" class="text-gray-600">ログアウト</a>`;
+  }
+  return `<button id="btnHeaderLogin" class="text-blue-600">ログイン</button>`;
+}
+function renderFooterHtml(): string {
+  return `<div class="max-w-[980px] mx-auto px-4 py-3 text-xs text-gray-500">© <span id="y"></span> AI Uploader</div>`;
+}
+function renderLoginRequiredHtml(): string {
+  return `<h1 class="text-lg font-semibold">ログインが必要です</h1>
+  <p class="text-gray-500 text-sm mt-1">右上の「ログイン」から認証してください。</p>`;
+}
+function layout(title: string, body: string, opts?: { isLoggedIn?: boolean; auth?: { supaUrl: string; anonKey: string } }): string {
+  const isLoggedIn = !!opts?.isLoggedIn;
   return `<!doctype html><html lang="ja"><head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -29,35 +46,215 @@ function layout(title: string, body: string): string {
     <header class="border-b border-gray-200 h-14 flex items-center">
       <div class="max-w-[980px] mx-auto px-4 w-full flex justify-between">
         <a href="/" class="font-semibold text-gray-900">AI Uploader</a>
-        <nav class="flex gap-3">
-          <a href="/items" class="text-blue-600">一覧</a>
-          <a href="/upload" class="text-blue-600">アップロード</a>
-        </nav>
+        <nav class="flex gap-3" data-shared-header>${renderHeaderHtml(isLoggedIn)}</nav>
       </div>
     </header>
     <main class="max-w-[980px] mx-auto px-4 py-4">${body}</main>
-    <footer class="border-t border-gray-200">
-      <div class="max-w-[980px] mx-auto px-4 py-3 text-xs text-gray-500">© ${new Date().getFullYear()} AI Uploader</div>
-    </footer>
+    <footer class="border-t border-gray-200">${renderFooterHtml()}</footer>
   <script src="https://cdn.jsdelivr.net/npm/plyr@3/dist/plyr.polyfilled.min.js"></script>
   <script>try{window.Plyr&&new window.Plyr('video');window.Plyr&&new window.Plyr('audio');}catch(e){}</script>
+  <script type="module" src="/header-login.js"></script>
+  <script type="module" src="/ui-shared.js"></script>
   </body></html>`;
+}
+
+// --- Auth helpers (Supabase) ---
+function parseCookies(header: string | null): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!header) return out;
+  for (const part of header.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    const k = part.slice(0, idx).trim();
+    const v = part.slice(idx + 1).trim();
+    if (k) out[k] = v;
+  }
+  return out;
+}
+
+function getAccessTokenFromRequest(req: Request): string | null {
+  const auth = req.headers.get('authorization') || req.headers.get('Authorization');
+  if (auth && /^Bearer\s+(.+)/i.test(auth)) {
+    const m = auth.match(/^Bearer\s+(.+)/i);
+    if (m) return m[1];
+  }
+  const ck = parseCookies(req.headers.get('cookie'));
+  if (ck['sb-access-token']) return ck['sb-access-token'];
+  return null;
+}
+
+async function fetchSupabaseUser(token: string, env: Env): Promise<any | null> {
+  if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return null;
+  try {
+    const res = await fetch(env.SUPABASE_URL.replace(/\/$/, '') + '/auth/v1/user', {
+      headers: {
+        'authorization': 'Bearer ' + token,
+        'apikey': env.SUPABASE_ANON_KEY,
+      }
+    });
+    if (!res.ok) return null;
+    const j = await res.json();
+    return j || null;
+  } catch {
+    return null;
+  }
+}
+
+async function getAuthUser(req: Request, env: Env): Promise<any | null> {
+  const token = getAccessTokenFromRequest(req);
+  if (!token) return null;
+  return await fetchSupabaseUser(token, env);
+}
+
+function redirectToLogin(url: URL): Response {
+  const u = new URL('/login', url.origin);
+  const dest = url.pathname + (url.search || '');
+  u.searchParams.set('redirect', dest);
+  return Response.redirect(u, 302);
+}
+
+// login page removed. Header handles OAuth start.
+
+function authCallbackPage(env: Env, url: URL): Response {
+  const supaUrl = escapeHtml(env.SUPABASE_URL || '');
+  const anon = escapeHtml(env.SUPABASE_ANON_KEY || '');
+  const redirect = escapeHtml(url.searchParams.get('redirect') || '/items');
+  const body = `
+  <h1 class="text-lg font-semibold">ログイン処理中...</h1>
+  <p class="text-gray-500 text-sm">お待ちください。</p>
+  <script type="module">
+    import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+    const supabase = createClient('${supaUrl}', '${anon}');
+    try {
+      // Exchange OAuth code for a session (handles PKCE flow). Try modern and legacy methods.
+      try { await supabase.auth.exchangeCodeForSession(window.location.href); } catch {}
+      try { if (typeof supabase.auth.getSessionFromUrl === 'function') { await supabase.auth.getSessionFromUrl(); } } catch {}
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (token) {
+        await fetch('/auth/session', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ access_token: token }) });
+        location.replace('${redirect}');
+      } else {
+        location.replace('/?login=1');
+      }
+    } catch {
+      location.replace('/?login=1');
+    }
+  </script>`;
+  return html(layout('ログイン', body, { isLoggedIn: false, auth: { supaUrl: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY } }));
+}
+
+function loginRequiredPage(env: Env, url: URL): Response {
+  const body = renderLoginRequiredHtml();
+  return html(layout('ログインが必要です', body, { isLoggedIn: false, auth: { supaUrl: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY } }));
 }
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
 
+    // Canonicalize top: /index.html -> /
+    if (url.pathname === '/index.html') {
+      return Response.redirect(new URL('/', url.origin), 301);
+    }
+
+    // Auth routes
+    if (url.pathname === '/auth/config' && req.method === 'GET') {
+      const data = { url: env.SUPABASE_URL || '', anonKey: env.SUPABASE_ANON_KEY || '' };
+      return new Response(JSON.stringify(data), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+    }
+    if (url.pathname === '/auth/me' && req.method === 'GET') {
+      const user = await getAuthUser(req, env);
+      const res = { loggedIn: !!user };
+      return new Response(JSON.stringify(res), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+    }
+    if (url.pathname === '/auth/callback' && req.method === 'GET') {
+      return authCallbackPage(env, url);
+    }
+    if (url.pathname === '/auth/session' && req.method === 'POST') {
+      try {
+        const body: any = await req.json().catch(()=>({} as any));
+        const token = String(body?.access_token || '').trim();
+        if (!token) return new Response(JSON.stringify({ error: 'bad_request' }), { status: 400, headers: { 'content-type': 'application/json' } });
+        const user = await fetchSupabaseUser(token, env);
+        if (!user) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'content-type': 'application/json' } });
+        // Issue cookie
+        const isHttps = url.protocol === 'https:';
+        const cookieParts = [
+          'sb-access-token=' + token,
+          'Path=/',
+          'HttpOnly',
+          'SameSite=Lax',
+        ];
+        if (isHttps) cookieParts.push('Secure');
+        // set short max-age, rely on re-login as needed
+        cookieParts.push('Max-Age=3600');
+        const headers = new Headers();
+        headers.set('content-type', 'application/json');
+        headers.append('Set-Cookie', cookieParts.join('; '));
+        // Ensure user exists in DB (best-effort)
+        try {
+          await ensureTables(env);
+          const uid = String(user?.id || '');
+          const display = String(user?.user_metadata?.name || user?.email || '');
+          const uname = (uid || 'user').slice(0, 10);
+          if (uid) {
+            await env.DB.prepare(`INSERT OR IGNORE INTO users (id, username, displayName) VALUES (?, ?, ?)`)
+              .bind(uid, uname, display || uname).run();
+          }
+        } catch {}
+        return new Response(JSON.stringify({ ok: true }), { headers });
+      } catch {
+        return new Response(JSON.stringify({ error: 'internal' }), { status: 500, headers: { 'content-type': 'application/json' } });
+      }
+    }
+    if (url.pathname === '/logout' && (req.method === 'GET' || req.method === 'POST')) {
+      const isHttps = url.protocol === 'https:';
+      const headers = new Headers();
+      const parts = [ 'sb-access-token=; Path=/','HttpOnly','SameSite=Lax','Max-Age=0' ];
+      if (isHttps) parts.push('Secure');
+      headers.append('Set-Cookie', parts.join('; '));
+      const dest = url.searchParams.get('redirect') || '/';
+      headers.set('Location', dest);
+      return new Response(null, { status: 302, headers });
+    }
+
+    // Protect pages and upload endpoints
+    const isProtectedPage = req.method === 'GET' && (
+      url.pathname === '/' ||
+      url.pathname === '/items' ||
+      /^\/items\/[A-Za-z0-9_-]+$/.test(url.pathname) ||
+      url.pathname === '/upload'
+    );
+    if (isProtectedPage) {
+      const user = await getAuthUser(req, env);
+      if (!user) return loginRequiredPage(env, url);
+    }
+
+    const isProtectedUploadApi = (
+      (url.pathname.startsWith('/api/upload/multipart/') && (req.method === 'POST' || req.method === 'PUT')) ||
+      (url.pathname === '/api/upload' && req.method === 'POST')
+    );
+    if (isProtectedUploadApi) {
+      const user = await getAuthUser(req, env);
+      if (!user) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'content-type': 'application/json' } });
+    }
+
     // multipart upload endpoints for large files
     if (url.pathname === '/api/upload/multipart/init' && req.method === 'POST') {
       try {
-        const body = await req.json().catch(() => ({}));
+        const body: any = await req.json().catch(() => ({} as any));
         const filename = String(body?.filename || '').trim();
         const contentType = String(body?.contentType || 'application/octet-stream');
         if (!filename) return new Response(JSON.stringify({ error: 'bad_request', message: 'filename required' }), { status: 400, headers: { 'content-type': 'application/json' } });
-        const id = crypto.randomUUID();
+        // type validation
         const ext = extractExt(filename);
-        const key = `items/${id}/source${ext}`;
+        const extNoDot = ext ? ext.slice(1).toLowerCase() : '';
+        if (!isAllowedByConfig(extNoDot || inferExtFromContentType(contentType), contentType, env)) {
+          return new Response(JSON.stringify({ error: 'unsupported_type' }), { status: 400, headers: { 'content-type': 'application/json' } });
+        }
+        const id = crypto.randomUUID();
+        const key = `items/${id}/source${ext || ''}`;
         const mpu: any = await (env.R2 as any).createMultipartUpload(key, { httpMetadata: { contentType } });
         const uploadId = mpu?.uploadId || mpu?.uploadID || '';
         const partSizeBytes = 10 * 1024 * 1024; // 10MiB
@@ -82,10 +279,10 @@ export default {
     }
     if (url.pathname === '/api/upload/multipart/complete' && req.method === 'POST') {
       try {
-        const body = await req.json().catch(() => ({}));
+        const body: any = await req.json().catch(() => ({} as any));
         const key = String(body?.key || '');
         const uploadId = String(body?.uploadId || '');
-        const partsIn = Array.isArray(body?.parts) ? body.parts : [];
+        const partsIn: any[] = Array.isArray(body?.parts) ? body.parts : [];
         if (!key || !uploadId || !partsIn.length) return new Response(JSON.stringify({ error: 'bad_request' }), { status: 400, headers: { 'content-type': 'application/json' } });
         const parts = partsIn.map((p: any) => ({ partNumber: Number(p.partNumber), etag: String(p.etag) }));
         const mpu: any = await (env.R2 as any).resumeMultipartUpload(key, uploadId);
@@ -97,7 +294,7 @@ export default {
     }
     if (url.pathname === '/api/upload/multipart/abort' && req.method === 'POST') {
       try {
-        const body = await req.json().catch(() => ({}));
+        const body: any = await req.json().catch(() => ({} as any));
         const key = String(body?.key || '');
         const uploadId = String(body?.uploadId || '');
         if (!key || !uploadId) return new Response(JSON.stringify({ error: 'bad_request' }), { status: 400, headers: { 'content-type': 'application/json' } });
@@ -113,10 +310,17 @@ export default {
       const diag: any = { id: '', mainKey: '', thumbKey: '', insertCols: [] as string[], insertValsPreview: [] as string[], tags: [] as string[] };
       try {
         await ensureTables(env);
+        const authed = await getAuthUser(req, env);
+        if (!authed) {
+          if ((req.headers.get('accept') || '').includes('application/json')) {
+            return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'content-type': 'application/json' } });
+          }
+          return loginRequiredPage(env, url);
+        }
         const form = await req.formData();
         const preuploadedKey = String(form.get('preuploadedKey') || '').trim();
         const file = form.get('file');
-        if (!preuploadedKey && (!(file instanceof File) || (file as File).size === 0)) return html(layout('エラー', `<h1 class=\"text-lg font-semibold\">エラー</h1><p class=\"text-sm text-red-600\">ファイルは必須です。</p>`), 400);
+        if (!preuploadedKey && (!(file instanceof File) || (file as File).size === 0)) return html(layout('エラー', `<h1 class=\"text-lg font-semibold\">エラー</h1><p class=\"text-sm text-red-600\">ファイルは必須です。</p>`, { isLoggedIn: true }), 400);
 
         const title = String(form.get('title') || '').trim();
         const category = String(form.get('category') || '').trim().toUpperCase();
@@ -128,12 +332,12 @@ export default {
 
         if (!title) return html(layout('エラー', `<h1 class="text-lg font-semibold">エラー</h1><p class="text-sm text-red-600">タイトルは必須です。</p>`), 400);
         const allowedCats = ['IMAGE','VIDEO','MUSIC','VOICE','3D','OTHER'];
-        if (!allowedCats.includes(category)) return html(layout('エラー', `<h1 class=\"text-lg font-semibold\">エラー</h1><p class=\"text-sm text-red-600\">カテゴリーが不正です。</p>`), 400);
+        if (!allowedCats.includes(category)) return html(layout('エラー', `<h1 class=\"text-lg font-semibold\">エラー</h1><p class=\"text-sm text-red-600\">カテゴリーが不正です。</p>`, { isLoggedIn: true }), 400);
 
         const maxMb = Number(env.MAX_FILE_SIZE_MB || 2048);
         if (Number.isFinite(maxMb)) {
           const mb = preuploadedKey ? Number(form.get('sizeBytes') || 0) / (1024*1024) : (file as File).size / (1024*1024);
-          if (mb > maxMb) return html(layout('エラー', `<h1 class=\"text-lg font-semibold\">エラー</h1><p class=\"text-sm text-red-600\">ファイルサイズが上限(${maxMb}MB)を超えています。</p>`), 400);
+          if (mb > maxMb) return html(layout('エラー', `<h1 class=\"text-lg font-semibold\">エラー</h1><p class=\"text-sm text-red-600\">ファイルサイズが上限(${maxMb}MB)を超えています。</p>`, { isLoggedIn: true }), 400);
         }
 
         const id = crypto.randomUUID();
@@ -150,7 +354,19 @@ export default {
           srcExt = extractExt((f as any).name || '');
           contentType = (f as any).type || 'application/octet-stream';
           mainKey = `items/${id}/source${srcExt}`;
+          // ALLOWED_FILE_TYPES 検証
+          const extNoDot = (srcExt || '').slice(1).toLowerCase() || inferExtFromContentType(contentType);
+          if (!isAllowedByConfig(extNoDot, contentType, env)) {
+            return html(layout('エラー', `<h1 class=\"text-lg font-semibold\">エラー</h1><p class=\"text-sm text-red-600\">許可されていないファイル種別です。</p>`), 400);
+          }
           await env.R2.put(mainKey, f.stream(), { httpMetadata: { contentType } });
+        }
+        // preuploadedKey 経由のときも型チェック
+        {
+          const extNoDot = (srcExt || '').slice(1).toLowerCase() || inferExtFromContentType(contentType);
+          if (!isAllowedByConfig(extNoDot, contentType, env)) {
+            return html(layout('エラー', `<h1 class=\"text-lg font-semibold\">エラー</h1><p class=\"text-sm text-red-600\">許可されていないファイル種別です。</p>`), 400);
+          }
         }
         const thumbKey = (thumbnail instanceof File && (thumbnail as File).size > 0) ? `items/${id}/thumb${extractExt((thumbnail as any).name || '')}` : '';
         diag.mainKey = mainKey; diag.thumbKey = thumbKey;
@@ -164,12 +380,15 @@ export default {
             .bind('anonymous', 'anonymous', 'Anonymous').run();
         } catch {}
 
-        // 所有者ID（認証未実装のため暫定値。後でSupabase連携に置換）
-        const ownerUserId = 'anonymous';
-        // Ensure FK user exists
+        // 所有者ID（Supabaseユーザー）
+        const ownerUserId = String((authed as any)?.id || '');
         try {
-          await env.DB.prepare(`INSERT OR IGNORE INTO users (id, username, displayName) VALUES (?, ?, ?)`)
-            .bind(ownerUserId, ownerUserId, 'Anonymous').run();
+          if (ownerUserId) {
+            const display = String((authed as any)?.user_metadata?.name || (authed as any)?.email || ownerUserId);
+            const uname = ownerUserId.slice(0, 10);
+            await env.DB.prepare(`INSERT OR IGNORE INTO users (id, username, displayName) VALUES (?, ?, ?)`)
+              .bind(ownerUserId, uname, display).run();
+          }
         } catch {}
 
         // items 挿入（スキーマ差異に合わせて動的にカラム選択）
@@ -249,12 +468,201 @@ export default {
         return Response.redirect(new URL(`/items/${id}`, url.origin), 303);
       } catch (e: any) {
         const details = await buildDetailedErrorHtml(e, env, diag);
-        return html(layout('エラー', details), 500);
+        return html(layout('エラー', details, { isLoggedIn: true }), 500);
+      }
+    }
+
+    // publish toggle (owner only)
+    {
+      const m = /^\/api\/items\/([A-Za-z0-9_-]+)\/publish$/.exec(url.pathname);
+      if (m && req.method === 'POST') {
+        const authed = await getAuthUser(req, env);
+        if (!authed) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'content-type': 'application/json' } });
+        const id = m[1];
+        try {
+          await ensureTables(env);
+          const row: any = await env.DB.prepare(`SELECT id, ownerUserId, owner_user_id FROM items WHERE id = ? LIMIT 1`).bind(id).first();
+          if (!row) return new Response(JSON.stringify({ error: 'not_found' }), { status: 404, headers: { 'content-type': 'application/json' } });
+          const owner = row.ownerUserId ?? row.owner_user_id ?? '';
+          const uid = String((authed as any)?.id || '');
+          if (!uid || owner !== uid) {
+            return new Response(JSON.stringify({ error: 'forbidden' }), { status: 403, headers: { 'content-type': 'application/json' } });
+          }
+          const body: any = await req.json().catch(()=>({}));
+          const visibilityIn = String(body?.visibility || 'public').toLowerCase();
+          const toPublic = visibilityIn !== 'private';
+          const nowIso = new Date().toISOString();
+          if (toPublic) {
+            await env.DB.prepare(`UPDATE items SET visibility = 'public', published_at = ?, updated_at = ? WHERE id = ?`).bind(nowIso, nowIso, id).run();
+          } else {
+            await env.DB.prepare(`UPDATE items SET visibility = 'private', published_at = NULL, updated_at = ? WHERE id = ?`).bind(nowIso, id).run();
+          }
+          return new Response(JSON.stringify({ ok: true, id, visibility: toPublic ? 'public' : 'private', publishedAt: toPublic ? nowIso : null }), { headers: { 'content-type': 'application/json' } });
+        } catch (e: any) {
+          return new Response(JSON.stringify({ error: 'internal', message: String(e?.message || e) }), { status: 500, headers: { 'content-type': 'application/json' } });
+        }
+      }
+    }
+
+    // issue download URL (signed-like via token) - login required
+    {
+      const m = /^\/api\/items\/([A-Za-z0-9_-]+)\/download-url$/.exec(url.pathname);
+      if (m && req.method === 'POST') {
+        const authed = await getAuthUser(req, env);
+        if (!authed) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'content-type': 'application/json' } });
+        const userId = String((authed as any)?.id || '');
+        const id = m[1];
+        try {
+          await ensureTables(env);
+          const row: any = await env.DB.prepare(`SELECT id, ownerUserId, owner_user_id, visibility, file_key, fileKey, original_filename, originalFilename FROM items WHERE id = ? LIMIT 1`).bind(id).first();
+          if (!row) return new Response(JSON.stringify({ error: 'not_found' }), { status: 404, headers: { 'content-type': 'application/json' } });
+          const owner = row.ownerUserId ?? row.owner_user_id ?? '';
+          const visibility = String(row.visibility ?? 'public');
+          const canDownload = visibility === 'public' || (owner && owner === userId);
+          if (!canDownload) return new Response(JSON.stringify({ error: 'forbidden' }), { status: 403, headers: { 'content-type': 'application/json' } });
+
+          const fileKey = row.file_key ?? row.fileKey ?? '';
+          if (!fileKey) return new Response(JSON.stringify({ error: 'bad_item' }), { status: 400, headers: { 'content-type': 'application/json' } });
+
+          // rate limit: per IP+user+item
+          const ip = req.headers.get('cf-connecting-ip') || '0.0.0.0';
+          const windowSec = 60;
+          const perKeyLimit = Number(env.RATE_LIMIT_DOWNLOAD_PER_MINUTE || 10);
+          const do1 = env.RATE_LIMITER_DO.get(env.RATE_LIMITER_DO.idFromName(`rate:${id}:${userId}:${ip}`));
+          const r1 = await do1.fetch(`https://do/limit?window=${windowSec}&limit=${perKeyLimit}`, { method: 'POST' });
+          const rj1: any = await r1.json().catch(()=>({ allowed: true }));
+          if (rj1?.allowed === false) {
+            const retrySec = Math.max(1, Math.ceil((Number(rj1.resetAt||0) - Date.now())/1000));
+            const h = new Headers({ 'content-type':'application/json', 'retry-after': String(retrySec) });
+            return new Response(JSON.stringify({ error: 'rate_limited', scope: 'item', resetAt: rj1.resetAt }), { status: 429, headers: h });
+          }
+
+          // user-scope
+          const perUser = Number(env.RATE_LIMIT_DOWNLOAD_PER_USER_PER_MINUTE || 5);
+          if (perUser > 0) {
+            const do2 = env.RATE_LIMITER_DO.get(env.RATE_LIMITER_DO.idFromName(`rate-user:${userId}`));
+            const r2 = await do2.fetch(`https://do/limit?window=${windowSec}&limit=${perUser}`, { method: 'POST' });
+            const rj2: any = await r2.json().catch(()=>({ allowed: true }));
+            if (rj2?.allowed === false) {
+              const retrySec = Math.max(1, Math.ceil((Number(rj2.resetAt||0) - Date.now())/1000));
+              const h = new Headers({ 'content-type':'application/json', 'retry-after': String(retrySec) });
+              return new Response(JSON.stringify({ error: 'rate_limited', scope: 'user', resetAt: rj2.resetAt }), { status: 429, headers: h });
+            }
+          }
+
+          // global-scope
+          const perGlobal = Number(env.RATE_LIMIT_GLOBAL_DOWNLOAD_PER_MINUTE || 100);
+          if (perGlobal > 0) {
+            const do3 = env.RATE_LIMITER_DO.get(env.RATE_LIMITER_DO.idFromName(`rate-global`));
+            const r3 = await do3.fetch(`https://do/limit?window=${windowSec}&limit=${perGlobal}`, { method: 'POST' });
+            const rj3: any = await r3.json().catch(()=>({ allowed: true }));
+            if (rj3?.allowed === false) {
+              const retrySec = Math.max(1, Math.ceil((Number(rj3.resetAt||0) - Date.now())/1000));
+              const h = new Headers({ 'content-type':'application/json', 'retry-after': String(retrySec) });
+              return new Response(JSON.stringify({ error: 'rate_limited', scope: 'global', resetAt: rj3.resetAt }), { status: 429, headers: h });
+            }
+          }
+
+          // TTL
+          const bodyIn: any = await req.json().catch(()=>({}));
+          const wantTtlMin = Math.max(1, Number(bodyIn?.ttlMinutes || env.DEFAULT_DOWNLOAD_TTL_MINUTES || 15));
+          const ttlMin = Math.min(wantTtlMin, Number(env.MAX_DOWNLOAD_TTL_MINUTES || 120));
+          const expireAtMs = Date.now() + ttlMin * 60 * 1000;
+
+          // token create
+          const token = crypto.randomUUID().replace(/-/g,'');
+          const tokenDo = env.RATE_LIMITER_DO.get(env.RATE_LIMITER_DO.idFromName(`dl-token:${token}`));
+          await tokenDo.fetch('https://do/token/create', { method: 'POST', headers: { 'content-type':'application/json' }, body: JSON.stringify({ itemId: id, userId, fileKey, expireAtMs, oneTime: true }) });
+
+          const given = row.original_filename ?? row.originalFilename ?? '';
+          const u = new URL('/api/file', url.origin);
+          u.searchParams.set('t', token);
+          u.searchParams.set('download', '1');
+          if (given) u.searchParams.set('name', String(given));
+
+          return new Response(JSON.stringify({ url: u.pathname + '?' + u.searchParams.toString(), ttlMinutes: ttlMin }), { headers: { 'content-type': 'application/json' } });
+        } catch (e: any) {
+          return new Response(JSON.stringify({ error: 'internal', message: String(e?.message || e) }), { status: 500, headers: { 'content-type': 'application/json' } });
+        }
+      }
+    }
+
+    // --- DEBUG endpoints (development only) ---
+    if (url.pathname.startsWith('/api/debug/')) {
+      if (String(env.ENVIRONMENT || '').toLowerCase() !== 'development') {
+        return new Response(JSON.stringify({ error: 'not_found' }), { status: 404, headers: { 'content-type': 'application/json' } });
+      }
+      const authed = await getAuthUser(req, env);
+      if (!authed) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'content-type': 'application/json' } });
+
+      // /api/debug/rate?scope=item&itemId=...&userId=...&ip=...
+      // /api/debug/rate?scope=user&userId=...
+      // /api/debug/rate?scope=global
+      // /api/debug/rate?name=raw-do-name
+      if (url.pathname === '/api/debug/rate' && req.method === 'GET') {
+        try {
+          let name = url.searchParams.get('name') || '';
+          if (!name) {
+            const scope = String(url.searchParams.get('scope') || 'item');
+            if (scope === 'item') {
+              const itemId = String(url.searchParams.get('itemId') || '');
+              const userId = String(url.searchParams.get('userId') || '');
+              const ip = String(url.searchParams.get('ip') || req.headers.get('cf-connecting-ip') || '0.0.0.0');
+              if (!itemId || !userId) return new Response(JSON.stringify({ error: 'bad_request' }), { status: 400, headers: { 'content-type': 'application/json' } });
+              name = `rate:${itemId}:${userId}:${ip}`;
+            } else if (scope === 'user') {
+              const userId = String(url.searchParams.get('userId') || '');
+              if (!userId) return new Response(JSON.stringify({ error: 'bad_request' }), { status: 400, headers: { 'content-type': 'application/json' } });
+              name = `rate-user:${userId}`;
+            } else if (scope === 'global') {
+              name = 'rate-global';
+            }
+          }
+          if (!name) return new Response(JSON.stringify({ error: 'bad_request' }), { status: 400, headers: { 'content-type': 'application/json' } });
+          const id = env.RATE_LIMITER_DO.idFromName(name);
+          const stub = env.RATE_LIMITER_DO.get(id);
+          const resp = await stub.fetch('https://do/debug/rl');
+          const j = await resp.json().catch(()=>null);
+          return new Response(JSON.stringify({ name, debug: j }), { headers: { 'content-type': 'application/json' } });
+        } catch (e: any) {
+          return new Response(JSON.stringify({ error: 'internal', message: String(e?.message || e) }), { status: 500, headers: { 'content-type': 'application/json' } });
+        }
+      }
+
+      // /api/debug/token?t=...
+      if (url.pathname === '/api/debug/token' && req.method === 'GET') {
+        try {
+          const t = String(url.searchParams.get('t') || '');
+          if (!t) return new Response(JSON.stringify({ error: 'bad_request' }), { status: 400, headers: { 'content-type': 'application/json' } });
+          const id = env.RATE_LIMITER_DO.idFromName(`dl-token:${t}`);
+          const stub = env.RATE_LIMITER_DO.get(id);
+          const resp = await stub.fetch('https://do/debug/token');
+          const j = await resp.json().catch(()=>null);
+          return new Response(JSON.stringify({ token: t, debug: j }), { headers: { 'content-type': 'application/json' } });
+        } catch (e: any) {
+          return new Response(JSON.stringify({ error: 'internal', message: String(e?.message || e) }), { status: 500, headers: { 'content-type': 'application/json' } });
+        }
       }
     }
 
     if (url.pathname === '/api/file' && req.method === 'GET') {
-      const key = url.searchParams.get('k');
+      // protect file fetch behind login; allow token-based retrieval of key
+      const user = await getAuthUser(req, env);
+      if (!user) return new Response('unauthorized', { status: 401 });
+
+      let key = url.searchParams.get('k');
+      const token = url.searchParams.get('t') || '';
+      if (token && !key) {
+        try {
+          const stub = env.RATE_LIMITER_DO.get(env.RATE_LIMITER_DO.idFromName(`dl-token:${token}`));
+          const resp = await stub.fetch('https://do/token/get', { method: 'GET' });
+          const dat: any = await resp.json().catch(()=>null);
+          if (!dat || !dat.fileKey || dat.expireAtMs < Date.now() || dat.used) return new Response('expired', { status: 410 });
+          key = dat.fileKey;
+          // one-time consume
+          await stub.fetch('https://do/token/consume', { method: 'POST' });
+        } catch {}
+      }
       if (!key) return new Response('missing k', { status: 400 });
       try {
         const obj = await env.R2.get(key);
@@ -302,6 +710,9 @@ export default {
     }
 
     if (url.pathname === '/api/thumbnail' && req.method === 'GET') {
+      // protect thumbnail behind login (要ログイン仕様)
+      const user = await getAuthUser(req, env);
+      if (!user) return html(layout('ログインが必要です', `<h1 class=\"text-lg font-semibold\">ログインが必要です</h1><p class=\"text-gray-500 text-sm mt-1\">右上の「ログイン」から認証してください。</p>`, { isLoggedIn: false, auth: { supaUrl: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY } }));
       const key = url.searchParams.get('k');
       if (!key) return new Response('missing k', { status: 400 });
       try {
@@ -318,12 +729,12 @@ export default {
       }
     }
 
-    // minimal API placeholder
+    // minimal API: 未実装エンドポイントは 404
     if (url.pathname.startsWith('/api/')) {
-      return new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json' } });
+      return new Response(JSON.stringify({ error: 'not_found' }), { status: 404, headers: { 'content-type': 'application/json' } });
     }
 
-    // server-rendered minimal pages
+    // server-rendered minimal pages (after auth gate)
     if (req.method === 'GET') {
       if (url.pathname === '/' || url.pathname === '/items') return renderItems(env, url);
       const m = /^\/items\/([A-Za-z0-9_-]+)$/.exec(url.pathname);
@@ -353,14 +764,70 @@ export class RateLimiter implements DurableObject {
       if (request.method === 'POST' && url.pathname === '/check') {
         // body: TTL秒のメモ化チェック（URLクエリまたはデフォルト60秒）
         const ttl = Number(url.searchParams.get('ttl') || '3600');
-        const key = 'hit';
+        const key = 'check:hit';
         const prev = await this.state.storage.get<number>(key);
         const now = Date.now();
         if (prev && now - prev < ttl * 1000) {
           return new Response(JSON.stringify({ allowed: false }), { headers: { 'content-type': 'application/json' } });
         }
-        await this.state.storage.put(key, now, { expirationTtl: ttl });
+        await this.state.storage.put(key, now);
         return new Response(JSON.stringify({ allowed: true }), { headers: { 'content-type': 'application/json' } });
+      }
+
+      // Fixed window rate limit per DO instance
+      if (request.method === 'POST' && url.pathname === '/limit') {
+        const windowSec = Math.max(1, Number(url.searchParams.get('window') || '60'));
+        const limit = Math.max(1, Number(url.searchParams.get('limit') || '10'));
+        const now = Date.now();
+        const data = (await this.state.storage.get<any>('rl:data')) || null;
+        let windowStart = data?.windowStart || 0;
+        let count = data?.count || 0;
+        if (!windowStart || now - windowStart >= windowSec * 1000) {
+          windowStart = now;
+          count = 0;
+        }
+        count += 1;
+        const allowed = count <= limit;
+        const resetAt = windowStart + windowSec * 1000;
+        await this.state.storage.put('rl:data', { windowStart, count });
+        return new Response(JSON.stringify({ allowed, remaining: Math.max(0, limit - count), resetAt }), { headers: { 'content-type': 'application/json' } });
+      }
+
+      // Token management for one-time download URLs
+      if (url.pathname === '/token/create' && request.method === 'POST') {
+        const body = await request.json().catch(()=>({}));
+        const tokenData = {
+          itemId: String((body as any)?.itemId || ''),
+          userId: String((body as any)?.userId || ''),
+          fileKey: String((body as any)?.fileKey || ''),
+          expireAtMs: Number((body as any)?.expireAtMs || 0),
+          oneTime: !!(body as any)?.oneTime,
+          used: false as boolean,
+        };
+        await this.state.storage.put('dl:token', tokenData);
+        return new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json' } });
+      }
+      if (url.pathname === '/token/get' && request.method === 'GET') {
+        const tokenData = await this.state.storage.get<any>('dl:token');
+        return new Response(JSON.stringify(tokenData || null), { headers: { 'content-type': 'application/json' } });
+      }
+      if (url.pathname === '/token/consume' && request.method === 'POST') {
+        const tokenData = (await this.state.storage.get<any>('dl:token')) || null;
+        if (tokenData) {
+          tokenData.used = true;
+          await this.state.storage.put('dl:token', tokenData);
+        }
+        return new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json' } });
+      }
+
+      // Debug views
+      if (url.pathname === '/debug/rl' && request.method === 'GET') {
+        const data = (await this.state.storage.get<any>('rl:data')) || null;
+        return new Response(JSON.stringify(data), { headers: { 'content-type': 'application/json' } });
+      }
+      if (url.pathname === '/debug/token' && request.method === 'GET') {
+        const data = (await this.state.storage.get<any>('dl:token')) || null;
+        return new Response(JSON.stringify(data), { headers: { 'content-type': 'application/json' } });
       }
     } catch {}
     return new Response(JSON.stringify({ allowed: true }), { headers: { 'content-type': 'application/json' } });
@@ -420,7 +887,7 @@ async function renderItems(env: Env, url: URL): Promise<Response> {
     const body = `<h1 class="text-lg font-semibold">一覧</h1>
     <p class="text-gray-500 text-sm">データ取得に失敗しました。テーブル未作成の可能性があります。</p>
     <pre class="text-gray-500 text-xs whitespace-pre-wrap">${escapeHtml(String(e?.message || e))}</pre>`;
-    return html(layout('一覧', body));
+    return html(layout('一覧', body, { isLoggedIn: true }));
   }
 
   // 補助: tags結合（ある場合）
@@ -492,7 +959,7 @@ async function renderItems(env: Env, url: URL): Promise<Response> {
     ${filters}
     <div class="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(240px,1fr))] mt-3">${cards || '<div class="text-gray-500 text-sm">アイテムがありません</div>'}</div>
     ${pager}`;
-  return html(layout('一覧', body));
+  return html(layout('一覧', body, { isLoggedIn: true, auth: { supaUrl: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY } }));
 }
 
 async function renderItem(env: Env, id: string): Promise<Response> {
@@ -559,7 +1026,7 @@ async function renderItem(env: Env, id: string): Promise<Response> {
   const fbUrl = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(globalThis.location?.href||'')}`;
   const actions = `
   <div class="flex gap-2 flex-wrap mt-2.5">
-    <a class="inline-block px-3 py-1.5 border border-black rounded-md text-black hover:bg-black/5" href="/api/file?k=${encodeURIComponent(it.fileKey)}&download=1&name=${encodeURIComponent(it.originalFilename || it.title || 'download')}">ダウンロード</a>
+    <button id="btnDl" class="inline-block px-3 py-1.5 border border-black rounded-md text-black hover:bg-black/5">ダウンロード</button>
   </div>`;
 
   const desc = it.description ? `<div class="mt-4"><div class=\"text-gray-500 text-xs mb-1\">説明</div><p class="whitespace-pre-wrap">${escapeHtml(it.description)}</p></div>` : '';
@@ -602,10 +1069,20 @@ async function renderItem(env: Env, id: string): Promise<Response> {
     btnCopyUrl?.addEventListener('click', async()=>{
       try{ await navigator.clipboard.writeText(location.href); const prev=btnCopyUrl.getAttribute('title')||''; btnCopyUrl.setAttribute('title','コピーしました'); setTimeout(()=>btnCopyUrl.setAttribute('title', prev||'クリックでコピー'), 1500);}catch{}
     });
+    // download via API to get short-lived URL
+    const btnDl=document.getElementById('btnDl');
+    btnDl?.addEventListener('click', async()=>{
+      try{
+        btnDl.setAttribute('disabled','true');
+        const res = await fetch('/api/items/' + encodeURIComponent('${escapeHtml(String(it.id))}') + '/download-url', { method:'POST', headers:{'content-type':'application/json'} });
+        const j = await res.json();
+        if (res.ok && j?.url) location.href = j.url; else btnDl.removeAttribute('disabled');
+      }catch{ btnDl.removeAttribute('disabled'); }
+    });
   })();
   </script>
   `;
-  return html(layout(it.title || '詳細', body));
+  return html(layout(it.title || '詳細', body, { isLoggedIn: true, auth: { supaUrl: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY } }));
 }
 
 function mediaMarkup(it: any): string {
@@ -788,7 +1265,7 @@ async function renderUpload(env: Env): Promise<Response> {
     });
   })();
   </script>`;
-  return html(layout('アップロード', body));
+  return html(layout('アップロード', body, { isLoggedIn: true, auth: { supaUrl: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY } }));
 }
 
 function escapeHtml(s: string): string {
@@ -850,6 +1327,8 @@ function fileUrl(it: any): string {
 }
 
 async function ensureTables(env: Env): Promise<void> {
+  // enforce FK each call (D1は接続ごと)
+  try { await env.DB.prepare(`PRAGMA foreign_keys=ON;`).run(); } catch {}
   // items
   await env.DB.prepare(`
     CREATE TABLE IF NOT EXISTS items (
@@ -864,6 +1343,7 @@ async function ensureTables(env: Env): Promise<void> {
       size_bytes INTEGER,
       file_key TEXT NOT NULL,
       thumbnail_key TEXT,
+      published_at TEXT,
       created_at TEXT,
       updated_at TEXT
     )`).run();
@@ -907,6 +1387,7 @@ async function ensureTables(env: Env): Promise<void> {
       { name: 'size_bytes', type: 'INTEGER' },
       { name: 'file_key', type: 'TEXT' },
       { name: 'thumbnail_key', type: 'TEXT' },
+      { name: 'published_at', type: 'TEXT' },
       { name: 'created_at', type: 'TEXT' },
       { name: 'updated_at', type: 'TEXT' },
     ];
@@ -915,7 +1396,24 @@ async function ensureTables(env: Env): Promise<void> {
         await env.DB.prepare(`ALTER TABLE items ADD COLUMN ${w.name} ${w.type}`).run();
       }
     }
+    // indexes (存在列のみ安全に作成)
+    const has = (n: string) => colNames.has(n.toLowerCase());
+    // items (visibility, published_at)
+    if (has('visibility') && has('published_at')) {
+      try { await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_items_visibility_publishedAt ON items (visibility, published_at DESC)`).run(); } catch {}
+    }
+    // items (category, published_at)
+    if (has('category') && has('published_at')) {
+      try { await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_items_category_publishedAt ON items (category, published_at DESC)`).run(); } catch {}
+    }
+    // items (downloadCount) — 列が存在する場合のみ
+    if (has('downloadCount')) {
+      try { await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_items_downloadCount ON items (downloadCount DESC)`).run(); } catch {}
+    }
   } catch {}
+
+  // item_tags index
+  try { await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_item_tags_tag_item ON item_tags (tagId, itemId)`).run(); } catch {}
 }
 
 async function buildDetailedErrorHtml(e: any, env: Env, diag: any): Promise<string> {
@@ -980,4 +1478,33 @@ function extractExt(name: string): string {
   const ext = base.slice(dot + 1).toLowerCase();
   if (!/^[a-z0-9]{1,8}$/.test(ext)) return '';
   return '.' + ext;
+}
+
+function isAllowedByConfig(extNoDot: string, contentType: string, env: Env): boolean {
+  try {
+    const allowed = String(env.ALLOWED_FILE_TYPES || '').split(',').map(s=>s.trim().toLowerCase()).filter(Boolean);
+    if (!allowed.length) return true;
+    const ext = extNoDot?.toLowerCase() || '';
+    if (ext && allowed.includes(ext)) return true;
+    const inferred = inferExtFromContentType(contentType);
+    if (inferred && allowed.includes(inferred)) return true;
+    // jpeg vs jpg normalize
+    if (ext === 'jpeg' && allowed.includes('jpg')) return true;
+    if (ext === 'jpg' && allowed.includes('jpeg')) return true;
+    return false;
+  } catch { return true; }
+}
+
+function inferExtFromContentType(ct: string): string {
+  const t = String(ct || '').toLowerCase();
+  if (t === 'image/png') return 'png';
+  if (t === 'image/jpeg') return 'jpg';
+  if (t === 'image/webp') return 'webp';
+  if (t === 'video/mp4') return 'mp4';
+  if (t === 'video/webm') return 'webm';
+  if (t === 'audio/mpeg' || t === 'audio/mp3') return 'mp3';
+  if (t === 'audio/wav' || t === 'audio/x-wav') return 'wav';
+  if (t === 'model/gltf-binary' || t === 'application/octet-stream') return '';
+  if (t === 'model/obj' || t === 'text/plain') return 'obj';
+  return '';
 }

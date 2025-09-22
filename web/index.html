@@ -11,9 +11,8 @@
     <header class="border-b border-gray-200 h-14 flex items-center">
       <div class="max-w-[980px] mx-auto px-4 w-full flex justify-between">
         <a href="/" class="font-semibold text-gray-900">AI Uploader</a>
-        <nav class="flex gap-3">
-          <a href="/items" class="text-blue-600">一覧</a>
-          <a href="/upload" class="text-blue-600">アップロード</a>
+        <nav class="flex gap-3" data-shared-header>
+          <button id="btnHeaderLogin" class="text-blue-600">ログイン</button>
         </nav>
       </div>
     </header>
@@ -24,6 +23,7 @@
     <footer class="border-t border-gray-200">
       <div class="max-w-[980px] mx-auto px-4 py-3 text-xs text-gray-500">© <span id="y"></span> AI Uploader</div>
     </footer>
-    <script>document.getElementById('y').textContent=String(new Date().getFullYear());</script>
+    <script type="module" src="/ui-shared.js"></script>
+    <script type="module" src="/header-login.js"></script>
   </body>
   </html>
