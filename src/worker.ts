@@ -23,6 +23,7 @@ function layout(title: string, body: string): string {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${title}</title>
   <link rel="stylesheet" href="/app.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/plyr@3/dist/plyr.css" />
   </head><body>
     <header class="border-b border-gray-200 h-14 flex items-center">
       <div class="max-w-[980px] mx-auto px-4 w-full flex justify-between">
@@ -37,6 +38,8 @@ function layout(title: string, body: string): string {
     <footer class="border-t border-gray-200">
       <div class="max-w-[980px] mx-auto px-4 py-3 text-xs text-gray-500">© ${new Date().getFullYear()} AI Uploader</div>
     </footer>
+  <script src="https://cdn.jsdelivr.net/npm/plyr@3/dist/plyr.polyfilled.min.js"></script>
+  <script>try{window.Plyr&&new window.Plyr('video');window.Plyr&&new window.Plyr('audio');}catch(e){}</script>
   </body></html>`;
 }
 
@@ -446,6 +449,8 @@ async function renderItem(env: Env, id: string): Promise<Response> {
     sizeBytes: Number(row.size_bytes ?? row.sizeBytes ?? row.SIZE_BYTES ?? 0),
     fileKey: row.file_key ?? row.fileKey ?? row.FILE_KEY ?? '',
     thumbnailKey: row.thumbnail_key ?? row.thumbnailKey ?? row.THUMBNAIL_KEY ?? '',
+    contentType: row.contentType ?? row.CONTENTTYPE ?? row.CONTENT_TYPE ?? '',
+    extension: row.extension ?? row.EXTENSION ?? '',
     createdAt: row.created_at ?? row.CREATED_AT ?? row.createdAt ?? null,
   };
 
@@ -475,20 +480,17 @@ async function renderItem(env: Env, id: string): Promise<Response> {
 
   const actions = `
   <div class="flex gap-2 flex-wrap mt-2.5">
-    <a class="inline-block px-3 py-1.5 border border-black rounded-md text-black hover:bg-black/5" href="/api/file?k=${encodeURIComponent(it.fileKey)}" target="_blank">原寸プレビュー</a>
     <button class="inline-block px-3 py-1.5 border border-black rounded-md text-black hover:bg-black/5" id="btnCopy">URLをコピー</button>
     <a class="inline-block px-3 py-1.5 border border-black rounded-md text-black hover:bg-black/5" href="/api/file?k=${encodeURIComponent(it.fileKey)}&download=1&name=${encodeURIComponent(it.originalFilename || it.title || 'download')}">ダウンロード</a>
   </div>`;
 
   const desc = it.description ? `<div class="mt-4"><div class=\"text-gray-500 text-xs mb-1\">説明</div><p class="whitespace-pre-wrap">${escapeHtml(it.description)}</p></div>` : '';
-  const prm = it.prompt ? `<div class="mt-4"><div class=\"text-gray-500 text-xs mb-1\">Prompt</div><p class="whitespace-pre-wrap">${escapeHtml(it.prompt)}</p></div>` : '';
+  const prm = it.prompt ? `<div class="mt-4"><div class=\"flex items-center justify-between\"><div class=\"text-gray-500 text-xs mb-1\">Prompt</div><button id=\"btnCopyPrompt\" class=\"inline-block px-2 py-1 text-xs border border-black rounded-md text-black hover:bg-black/5\">コピー</button></div><pre id=\"promptText\" class=\"whitespace-pre-wrap text-sm\">${escapeHtml(it.prompt)}</pre></div>` : '';
 
   const body = `
   <div class="flex items-start gap-4">
     <div class="flex-1">
-      <div class="bg-gray-100 rounded-md overflow-hidden mb-2">
-        <img class="w-full h-auto block" src="${fileUrl(it)}" alt="thumb" loading="lazy" />
-      </div>
+      ${mediaMarkup(it)}
     </div>
     <div class="flex-1 min-w-[280px]">
       <h1 class="text-lg font-semibold">${escapeHtml(it.title)}</h1>
@@ -504,10 +506,34 @@ async function renderItem(env: Env, id: string): Promise<Response> {
     btnCopy?.addEventListener('click',async()=>{
       try{ await navigator.clipboard.writeText(location.href); btnCopy.textContent='コピーしました'; setTimeout(()=>btnCopy.textContent='URLをコピー',1500);}catch{}
     });
+    const btnCopyPrompt=document.getElementById('btnCopyPrompt');
+    const promptEl=document.getElementById('promptText');
+    btnCopyPrompt?.addEventListener('click',async()=>{
+      try{ const text=(promptEl?.textContent||''); await navigator.clipboard.writeText(text); btnCopyPrompt.textContent='コピーしました'; setTimeout(()=>btnCopyPrompt.textContent='コピー',1500);}catch{}
+    });
   })();
   </script>
   `;
   return html(layout(it.title || '詳細', body));
+}
+
+function mediaMarkup(it: any): string {
+  const cat = String(it.category || '').toUpperCase();
+  const fileSrc = fileUrl(it);
+  const thumb = thumbnailUrl(it);
+  if (cat === 'IMAGE') {
+    return `<div class="bg-gray-100 rounded-md overflow-hidden mb-2"><img class="w-full h-auto block" src="${fileSrc}" alt="image" loading="lazy" /></div>`;
+  }
+  if (cat === 'VIDEO') {
+    const poster = it.thumbnailKey ? ` poster=\"${thumb}\"` : '';
+    return `<div class=\"bg-gray-100 rounded-md overflow-hidden mb-2\"><video class=\"w-full h-auto\" controls playsinline preload=\"metadata\"${poster}><source src=\"${fileSrc}\" type=\"${escapeHtml(it.contentType || 'video/mp4')}\" /></video></div>`;
+  }
+  if (cat === 'MUSIC' || cat === 'VOICE') {
+    const img = it.thumbnailKey ? `<img class=\"w-16 h-16 object-cover rounded\" src=\"${thumb}\" alt=\"thumb\" />` : '';
+    return `<div class="bg-gray-50 rounded-md p-3 mb-2 flex items-center gap-3">${img}<audio controls preload="metadata" class="w-full"><source src="${fileSrc}" type="${escapeHtml(it.contentType || 'audio/mpeg')}" /></audio></div>`;
+  }
+  // 3D / OTHER -> show thumbnail if any else placeholder (thumbnailUrl already handles fallback/icon)
+  return `<div class="bg-gray-100 rounded-md overflow-hidden mb-2"><img class="w-full h-auto block" src="${thumb}" alt="preview" loading="lazy" /></div>`;
 }
 
 async function renderUpload(env: Env): Promise<Response> {
