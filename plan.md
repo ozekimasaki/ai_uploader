@@ -321,3 +321,34 @@ wrangler secret list
 - プライバシー: EXIF保持の注意喚起をUIで明示
 
 ---
+
+## 実装済みの +α 機能／補足（現在の実装との差分メモ）
+
+- マルチパートアップロード（Worker経由）
+	- `POST /api/upload/multipart/init` / `PUT /api/upload/multipart/part` / `POST /api/upload/multipart/complete` / `POST /api/upload/multipart/abort`
+	- ブラウザ→Workers→R2 のプロキシ方式（presign直PUTの代替。将来presign方式と併存/切替可能）
+- メタデータ登録API（暫定）
+	- `POST /api/upload`（FormData）。大容量時は先にマルチパートでR2へ格納→`preuploadedKey` で登録
+	- タグ入力は最大5件・3〜20文字・重複不可（UI補助: 既存タグチップ選択）
+- 配信系エンドポイント
+	- `GET /api/file?k=...` 本体ストリーミング（`inline/attachment` 切替、ETag/Cache-Control付与）
+	- `GET /api/thumbnail?k=...` サムネ配信。無い場合はプレースホルダーPNG
+- SSRミニマル画面（Workers内レンダリング）
+	- `GET /items` 一覧（検索q/カテゴリ/tag/並び替えpopular|new/ページング）
+	- `GET /items/[id]` 詳細（説明・Prompt表示、Promptコピー、共有ボタン［X/LINE/Facebook/URLコピー］）
+	- `GET /upload` アップロード画面（進捗ダイアログ/プログレスバー、マルチパート自動切替）
+- ダウンロード人気カウントの重複抑止（簡易）
+	- Durable Objectを用い、同一IP×同一アイテムで一定期間（TTL=3600秒）内の重複加算を抑止
+	- 率制限の「拒否」は未実装（将来トークンバケット等で拡張）
+- スキーマ吸収の耐性
+	- `PRAGMA table_info` に基づく既存カラム自動検出で `items/tags/item_tags` 挿入を実施（列名バリエーションを吸収）
+- ファイルサイズ上限の検証（`MAX_FILE_SIZE_MB`）
+	- 環境変数 `ALLOWED_FILE_TYPES` は定義済みだが、拡張子/Content-Type検証は未有効化（今後追加）
+
+### 補足（リポ構成・設定）
+
+- 静的アセット配信の実ディレクトリ
+	- 本リポでは `wrangler.jsonc.assets.directory` は `./web/dist`（Viteの`root: web`／`outDir: dist`）
+- 将来の方向性
+	- 認証（Supabase Auth/Discord）とダウンロードの署名URL発行・TTL・レート制御の厳格化を段階導入
+	- presign直PUT方式との併存/切替（現在はWorkers経由方式）
