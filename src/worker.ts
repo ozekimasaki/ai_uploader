@@ -44,14 +44,75 @@ export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
 
+    // multipart upload endpoints for large files
+    if (url.pathname === '/api/upload/multipart/init' && req.method === 'POST') {
+      try {
+        const body = await req.json().catch(() => ({}));
+        const filename = String(body?.filename || '').trim();
+        const contentType = String(body?.contentType || 'application/octet-stream');
+        if (!filename) return new Response(JSON.stringify({ error: 'bad_request', message: 'filename required' }), { status: 400, headers: { 'content-type': 'application/json' } });
+        const id = crypto.randomUUID();
+        const ext = extractExt(filename);
+        const key = `items/${id}/source${ext}`;
+        const mpu: any = await (env.R2 as any).createMultipartUpload(key, { httpMetadata: { contentType } });
+        const uploadId = mpu?.uploadId || mpu?.uploadID || '';
+        const partSizeBytes = 10 * 1024 * 1024; // 10MiB
+        return new Response(JSON.stringify({ id, key, uploadId, partSizeBytes }), { headers: { 'content-type': 'application/json' } });
+      } catch (e: any) {
+        return new Response(JSON.stringify({ error: 'init_failed', message: String(e?.message || e) }), { status: 500, headers: { 'content-type': 'application/json' } });
+      }
+    }
+    if (url.pathname === '/api/upload/multipart/part' && req.method === 'PUT') {
+      try {
+        const key = url.searchParams.get('key') || '';
+        const uploadId = url.searchParams.get('uploadId') || '';
+        const partNumber = Number(url.searchParams.get('partNumber') || '0');
+        if (!key || !uploadId || !partNumber) return new Response(JSON.stringify({ error: 'bad_request' }), { status: 400, headers: { 'content-type': 'application/json' } });
+        const mpu: any = await (env.R2 as any).resumeMultipartUpload(key, uploadId);
+        const res: any = await mpu.uploadPart(partNumber, (req as any).body);
+        const etag = res?.etag || res?.ETag || '';
+        return new Response(JSON.stringify({ etag }), { headers: { 'content-type': 'application/json' } });
+      } catch (e: any) {
+        return new Response(JSON.stringify({ error: 'part_failed', message: String(e?.message || e) }), { status: 500, headers: { 'content-type': 'application/json' } });
+      }
+    }
+    if (url.pathname === '/api/upload/multipart/complete' && req.method === 'POST') {
+      try {
+        const body = await req.json().catch(() => ({}));
+        const key = String(body?.key || '');
+        const uploadId = String(body?.uploadId || '');
+        const partsIn = Array.isArray(body?.parts) ? body.parts : [];
+        if (!key || !uploadId || !partsIn.length) return new Response(JSON.stringify({ error: 'bad_request' }), { status: 400, headers: { 'content-type': 'application/json' } });
+        const parts = partsIn.map((p: any) => ({ partNumber: Number(p.partNumber), etag: String(p.etag) }));
+        const mpu: any = await (env.R2 as any).resumeMultipartUpload(key, uploadId);
+        await mpu.complete(parts);
+        return new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json' } });
+      } catch (e: any) {
+        return new Response(JSON.stringify({ error: 'complete_failed', message: String(e?.message || e) }), { status: 500, headers: { 'content-type': 'application/json' } });
+      }
+    }
+    if (url.pathname === '/api/upload/multipart/abort' && req.method === 'POST') {
+      try {
+        const body = await req.json().catch(() => ({}));
+        const key = String(body?.key || '');
+        const uploadId = String(body?.uploadId || '');
+        if (!key || !uploadId) return new Response(JSON.stringify({ error: 'bad_request' }), { status: 400, headers: { 'content-type': 'application/json' } });
+        const mpu: any = await (env.R2 as any).resumeMultipartUpload(key, uploadId);
+        await mpu.abort();
+        return new Response(JSON.stringify({ ok: true }), { headers: { 'content-type': 'application/json' } });
+      } catch (e: any) {
+        return new Response(JSON.stringify({ error: 'abort_failed', message: String(e?.message || e) }), { status: 500, headers: { 'content-type': 'application/json' } });
+      }
+    }
     if (url.pathname === '/api/upload' && req.method === 'POST') {
       // 診断情報（失敗時に詳細を表示）
       const diag: any = { id: '', mainKey: '', thumbKey: '', insertCols: [] as string[], insertValsPreview: [] as string[], tags: [] as string[] };
       try {
         await ensureTables(env);
         const form = await req.formData();
+        const preuploadedKey = String(form.get('preuploadedKey') || '').trim();
         const file = form.get('file');
-        if (!(file instanceof File) || file.size === 0) return html(layout('エラー', `<h1 class="text-lg font-semibold">エラー</h1><p class="text-sm text-red-600">ファイルは必須です。</p>`), 400);
+        if (!preuploadedKey && (!(file instanceof File) || (file as File).size === 0)) return html(layout('エラー', `<h1 class=\"text-lg font-semibold\">エラー</h1><p class=\"text-sm text-red-600\">ファイルは必須です。</p>`), 400);
 
         const title = String(form.get('title') || '').trim();
         const category = String(form.get('category') || '').trim().toUpperCase();
@@ -67,20 +128,28 @@ export default {
 
         const maxMb = Number(env.MAX_FILE_SIZE_MB || 2048);
         if (Number.isFinite(maxMb)) {
-          const mb = file.size / (1024*1024);
+          const mb = preuploadedKey ? Number(form.get('sizeBytes') || 0) / (1024*1024) : (file as File).size / (1024*1024);
           if (mb > maxMb) return html(layout('エラー', `<h1 class=\"text-lg font-semibold\">エラー</h1><p class=\"text-sm text-red-600\">ファイルサイズが上限(${maxMb}MB)を超えています。</p>`), 400);
         }
 
         const id = crypto.randomUUID();
         diag.id = id;
         const nowIso = new Date().toISOString();
-        const srcExt = extractExt((file as any).name || '');
-        const contentType = (file as any).type || 'application/octet-stream';
-        const mainKey = `items/${id}/source${srcExt}`;
-        const thumbKey = (thumbnail instanceof File && thumbnail.size > 0) ? `items/${id}/thumb${extractExt((thumbnail as any).name || '')}` : '';
+        let mainKey = preuploadedKey;
+        let contentType: string;
+        let srcExt: string;
+        if (preuploadedKey) {
+          contentType = String(form.get('contentType') || 'application/octet-stream');
+          srcExt = extractExt(preuploadedKey);
+        } else {
+          const f = file as File;
+          srcExt = extractExt((f as any).name || '');
+          contentType = (f as any).type || 'application/octet-stream';
+          mainKey = `items/${id}/source${srcExt}`;
+          await env.R2.put(mainKey, f.stream(), { httpMetadata: { contentType } });
+        }
+        const thumbKey = (thumbnail instanceof File && (thumbnail as File).size > 0) ? `items/${id}/thumb${extractExt((thumbnail as any).name || '')}` : '';
         diag.mainKey = mainKey; diag.thumbKey = thumbKey;
-
-        await env.R2.put(mainKey, file.stream(), { httpMetadata: { contentType } });
         if (thumbKey) {
           await env.R2.put(thumbKey, (thumbnail as File).stream(), { httpMetadata: { contentType: (thumbnail as File).type || 'image/png' } });
         }
@@ -127,8 +196,10 @@ export default {
         addAny(['visibility','VISIBILITY'], visibility);
         addAny(['description','DESCRIPTION'], description);
         addAny(['prompt','PROMPT'], prompt);
-        addAny(['original_filename','originalFilename','ORIGINAL_FILENAME'], (file as any).name || '');
-        addAny(['size_bytes','sizeBytes','SIZE_BYTES'], Number(file.size||0));
+        const originalName = preuploadedKey ? String(form.get('filename') || '') : (file as any).name || '';
+        const sizeBytes = preuploadedKey ? Number(form.get('sizeBytes') || 0) : Number((file as any).size || 0);
+        addAny(['original_filename','originalFilename','ORIGINAL_FILENAME'], originalName);
+        addAny(['size_bytes','sizeBytes','SIZE_BYTES'], sizeBytes);
         addAny(['file_key','fileKey','FILE_KEY'], mainKey);
         addAny(['contentType','CONTENT_TYPE'], contentType);
         addAny(['extension','EXTENSION'], srcExt ? srcExt.slice(1) : '');
@@ -168,6 +239,9 @@ export default {
           }
         }
 
+        if ((req.headers.get('accept') || '').includes('application/json')) {
+          return new Response(JSON.stringify({ ok: true, id, path: `/items/${id}` }), { headers: { 'content-type': 'application/json' } });
+        }
         return Response.redirect(new URL(`/items/${id}`, url.origin), 303);
       } catch (e: any) {
         const details = await buildDetailedErrorHtml(e, env, diag);
@@ -449,7 +523,7 @@ async function renderUpload(env: Env): Promise<Response> {
   }).join('');
 
   const body = `<h1 class="text-lg font-semibold">アップロード</h1>
-  <form class="mt-3 space-y-3" method="post" action="/api/upload" enctype="multipart/form-data">
+  <form id="uploadForm" class="mt-3 space-y-3" method="post" action="/api/upload" enctype="multipart/form-data">
     <div>
       <label class="block text-xs text-gray-600 mb-1">タイトル（必須）</label>
       <input name="title" required class="w-full border border-gray-300 rounded-md px-3 py-2" />
@@ -488,7 +562,7 @@ async function renderUpload(env: Env): Promise<Response> {
     </div>
     <div>
       <label class="block text-xs text-gray-600 mb-1">本体ファイル（必須）</label>
-      <input name="file" type="file" required class="block" />
+      <input name="file" id="fileInput" type="file" required class="block" />
     </div>
     <div>
       <label class="block text-xs text-gray-600 mb-1">サムネイル（任意）</label>
@@ -498,6 +572,16 @@ async function renderUpload(env: Env): Promise<Response> {
       <button class="inline-block px-4 py-2 border border-black rounded-md text-black hover:bg-black/5">アップロード</button>
     </div>
   </form>
+  <div id="progressTip" class="fixed bottom-4 right-4 w-72 shadow-lg rounded-md border border-gray-200 bg-white hidden">
+    <div class="px-3 py-2 border-b border-gray-100 flex justify-between items-center">
+      <div class="text-sm font-medium">アップロード中</div>
+      <button id="tipClose" class="text-gray-400 hover:text-gray-600 text-xs">閉じる</button>
+    </div>
+    <div class="p-3">
+      <div class="h-2 bg-gray-100 rounded overflow-hidden"><div id="prog" class="bg-blue-500 h-2 w-0"></div></div>
+      <div id="status" class="text-xs text-gray-500 mt-1"></div>
+    </div>
+  </div>
   <script>
   (function(){
     const input = document.getElementById('tagsInput');
@@ -524,6 +608,66 @@ async function renderUpload(env: Env): Promise<Response> {
       const label = el.getAttribute('data-label');
       if (!label) return;
       addTag(label);
+    });
+  })();
+  (function(){
+    const form = document.getElementById('uploadForm');
+    const fileEl = document.getElementById('fileInput');
+    const bar = document.getElementById('prog');
+    const status = document.getElementById('status');
+    const tip = document.getElementById('progressTip');
+    const tipClose = document.getElementById('tipClose');
+    function showTip(){ if (tip) tip.classList.remove('hidden'); }
+    function hideTip(){ if (tip) tip.classList.add('hidden'); }
+    tipClose?.addEventListener('click', ()=> hideTip());
+    function setProgress(r){ if (!bar) return; bar.style.width = Math.max(0, Math.min(100, r)) + '%'; }
+    async function sha256(buf){ const d=await crypto.subtle.digest('SHA-256', buf); return Array.from(new Uint8Array(d)).map(b=>b.toString(16).padStart(2,'0')).join(''); }
+    form?.addEventListener('submit', async (ev)=>{
+      if (!fileEl?.files?.length) return; // regular submit fallback
+      ev.preventDefault();
+      const file = fileEl.files[0];
+      const useMultipart = file.size > 10*1024*1024; // >10MiB
+      try {
+        showTip(); setProgress(0); status.textContent='準備中...';
+        let key = '';
+        if (useMultipart) {
+          status.textContent = '初期化中...';
+          const init = await fetch('/api/upload/multipart/init', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ filename: file.name, contentType: file.type||'application/octet-stream' }) });
+          const { id, key: k, uploadId, partSizeBytes } = await init.json();
+          key = k;
+          const totalParts = Math.ceil(file.size / partSizeBytes);
+          const etags = [];
+          for (let i=0;i<totalParts;i++){
+            const start = i*partSizeBytes; const end = Math.min(file.size, start+partSizeBytes);
+            const blob = file.slice(start, end);
+            status.textContent = 'アップロード中... (' + (i+1) + '/' + totalParts + ')';
+            const partUrl = '/api/upload/multipart/part?key=' + encodeURIComponent(key) + '&uploadId=' + encodeURIComponent(uploadId) + '&partNumber=' + (i+1);
+            const res = await fetch(partUrl, { method:'PUT', body: blob });
+            const j = await res.json();
+            etags.push({ partNumber: i+1, etag: j.etag });
+            setProgress(((i+1)/totalParts)*80);
+          }
+          status.textContent = '確定中...';
+          await fetch('/api/upload/multipart/complete', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ key, uploadId, parts: etags }) });
+          setProgress(85);
+        }
+        status.textContent = '登録中...';
+        const fd = new FormData(form);
+        if (key) {
+          fd.set('preuploadedKey', key);
+          fd.set('filename', file.name);
+          fd.set('sizeBytes', String(file.size));
+          fd.set('contentType', file.type||'application/octet-stream');
+          fd.delete('file');
+        }
+        const acceptJson = { headers: { 'accept':'application/json' }, method:'POST', body: fd };
+        const resp = await fetch('/api/upload', acceptJson);
+        const data = await resp.json().catch(()=>({}));
+        if (!resp.ok || !data?.ok) { status.textContent = '登録失敗'; return; }
+        setProgress(100); status.textContent = '完了';
+        // ページ遷移なし。必要なら詳細へリンクを表示
+        const a = document.createElement('a'); a.href = data.path; a.textContent = '詳細を開く'; a.className='text-blue-600 underline ml-2'; status.appendChild(a);
+      } catch (err){ status.textContent = 'エラー: '+ (err?.message||err); }
     });
   })();
   </script>`;
