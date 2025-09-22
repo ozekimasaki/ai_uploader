@@ -149,6 +149,12 @@ function loginRequiredPage(env: Env, url: URL): Response {
   return html(layout('ログインが必要です', body, { isLoggedIn: false, auth: { supaUrl: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY } }));
 }
 
+function normalizeUsernameFromId(uid: string): string {
+  const base = String(uid||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+  const s = base || 'user';
+  return s.slice(0, 10).padEnd(3, '0');
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
@@ -164,9 +170,27 @@ export default {
       return new Response(JSON.stringify(data), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
     }
     if (url.pathname === '/auth/me' && req.method === 'GET') {
-      const user = await getAuthUser(req, env);
-      const res = { loggedIn: !!user };
-      return new Response(JSON.stringify(res), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+    const user = await getAuthUser(req, env);
+    if (!user) {
+      return new Response(JSON.stringify({ loggedIn: false }), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+    }
+    try {
+      await ensureTables(env);
+    } catch {}
+    const uid = String((user as any)?.id || '');
+    let username = '';
+    try {
+      const row: any = await env.DB.prepare(`SELECT username FROM users WHERE id = ? LIMIT 1`).bind(uid).first();
+      username = String(row?.username ?? row?.USERNAME ?? '');
+      if (!/^[a-z0-9]{3,32}$/.test(username)) {
+        username = normalizeUsernameFromId(uid);
+        try { await env.DB.prepare(`UPDATE users SET username = ? WHERE id = ?`).bind(username, uid).run(); } catch {}
+      }
+    } catch {
+      username = normalizeUsernameFromId(uid);
+      try { await env.DB.prepare(`INSERT OR IGNORE INTO users (id, username, displayName) VALUES (?, ?, ?)`).bind(uid, username, '').run(); } catch {}
+    }
+    return new Response(JSON.stringify({ loggedIn: true, userId: uid, username }), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
     }
     if (url.pathname === '/auth/callback' && req.method === 'GET') {
       return authCallbackPage(env, url);
@@ -197,9 +221,11 @@ export default {
           await ensureTables(env);
           const uid = String(user?.id || '');
           const display = String(user?.user_metadata?.name || user?.email || '');
-          const uname = (uid || 'user').slice(0, 10);
+          const uname = normalizeUsernameFromId(uid);
           if (uid) {
-            await env.DB.prepare(`INSERT OR IGNORE INTO users (id, username, displayName) VALUES (?, ?, ?)`)
+            // upsert by id; keep username normalized
+            await env.DB.prepare(`INSERT INTO users (id, username, displayName) VALUES (?, ?, ?)
+              ON CONFLICT(id) DO UPDATE SET username=excluded.username, displayName=excluded.displayName`)
               .bind(uid, uname, display || uname).run();
           }
         } catch {}

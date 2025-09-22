@@ -20,7 +20,10 @@
       const me = await fetch('/auth/me', { credentials: 'same-origin' }).then(r=>r.json()).catch(()=>({loggedIn:false}));
       if (me?.loggedIn) {
         const nav = document.querySelector('[data-shared-header]');
-        if (nav) nav.innerHTML = '<a href="/items" class="text-blue-600">一覧</a>\n<a href="/upload" class="text-blue-600">アップロード</a>\n<a href="/logout" class="text-gray-600">ログアウト</a>';
+        if (nav) {
+          const my = me.username ? `<a href="/u/${me.username}" class="text-blue-600">マイページ</a>` : '';
+          nav.innerHTML = `<a href="/items" class="text-blue-600">一覧</a>\n<a href="/upload" class="text-blue-600">アップロード</a>\n${my}\n<a href="/logout" class="text-gray-600">ログアウト</a>`;
+        }
       }
     }catch(e){}
     const btn = document.getElementById('btnHeaderLogin');
