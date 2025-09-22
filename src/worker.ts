@@ -787,6 +787,28 @@ export default {
       }
     }
 
+    // Inspect specific item (owner only) for debugging
+    if (url.pathname === '/api/debug/item' && req.method === 'GET') {
+      try {
+        const authed = await getAuthUser(req, env);
+        if (!authed) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'content-type': 'application/json' } });
+        const viewerId = String((authed as any)?.id || '');
+        const itemId = String(url.searchParams.get('id') || '');
+        if (!itemId) return new Response(JSON.stringify({ error: 'bad_request' }), { status: 400, headers: { 'content-type': 'application/json' } });
+        await ensureTables(env);
+        const row: any = await env.DB.prepare(`SELECT * FROM items WHERE id = ? LIMIT 1`).bind(itemId).first();
+        if (!row) return new Response(JSON.stringify({ error: 'not_found' }), { status: 404, headers: { 'content-type': 'application/json' } });
+        const owner = row.ownerUserId ?? row.OWNERUSERID ?? row.owner_user_id ?? row.OWNER_USER_ID ?? '';
+        const ok = owner && owner === viewerId;
+        if (!ok) return new Response(JSON.stringify({ error: 'forbidden', owner, viewerId }), { status: 403, headers: { 'content-type': 'application/json' } });
+        const info: any = await env.DB.prepare(`PRAGMA table_info(items)`).all();
+        const cols: any[] = info?.results ?? info ?? [];
+        return new Response(JSON.stringify({ row, columns: cols.map((r: any)=>r.name ?? r.NAME), owner, viewerId }), { headers: { 'content-type': 'application/json' } });
+      } catch (e: any) {
+        return new Response(JSON.stringify({ error: 'internal', message: String(e?.message || e) }), { status: 500, headers: { 'content-type': 'application/json' } });
+      }
+    }
+
     if (url.pathname === '/api/thumbnail' && req.method === 'GET') {
       // protect thumbnail behind login (要ログイン仕様)
       const user = await getAuthUser(req, env);
