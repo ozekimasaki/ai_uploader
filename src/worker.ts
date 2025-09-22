@@ -750,7 +750,7 @@ export default {
     if (req.method === 'GET') {
       if (url.pathname === '/' || url.pathname === '/items') return renderItems(env, url);
       const m = /^\/items\/([A-Za-z0-9_-]+)$/.exec(url.pathname);
-      if (m) return renderItem(env, m[1]);
+      if (m) return renderItem(env, m[1], req);
       if (url.pathname === '/upload') return renderUpload(env);
     }
 
