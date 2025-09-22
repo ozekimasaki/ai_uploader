@@ -1073,10 +1073,25 @@ async function renderItem(env: Env, id: string): Promise<Response> {
     const btnDl=document.getElementById('btnDl');
     btnDl?.addEventListener('click', async()=>{
       try{
+        const itemId='${escapeHtml(String(it.id))}';
+        const fallbackName = ${JSON.stringify(String((it as any).originalFilename || (it as any).title || 'download'))};
+        const fallbackUrl = '/api/file?k=' + encodeURIComponent('${escapeHtml(String(it.fileKey))}') + '&download=1&name=' + encodeURIComponent(fallbackName);
         btnDl.setAttribute('disabled','true');
-        const res = await fetch('/api/items/' + encodeURIComponent('${escapeHtml(String(it.id))}') + '/download-url', { method:'POST', headers:{'content-type':'application/json'} });
-        const j = await res.json();
-        if (res.ok && j?.url) location.href = j.url; else btnDl.removeAttribute('disabled');
+        const res = await fetch('/api/items/' + encodeURIComponent(itemId) + '/download-url', { method:'POST', headers:{'content-type':'application/json','accept':'application/json'}, credentials:'same-origin' });
+        const ct = res.headers.get('content-type')||'';
+        const j = ct.includes('application/json') ? (await res.json().catch(()=>({}))) : {};
+        if (res.ok && j?.url) { location.href = j.url; return; }
+        if (res.status === 401) { location.href='/?login=1'; return; }
+        if (res.status === 403) { alert('このアイテムは非公開です（または権限がありません）'); btnDl.removeAttribute('disabled'); return; }
+        if (res.status === 404) { alert('アイテムが見つかりません'); btnDl.removeAttribute('disabled'); return; }
+        if (res.status === 429) {
+          const retry = Number(res.headers.get('retry-after')||'0');
+          alert('ダウンロードの回数制限に達しました。' + (retry? ('約'+retry+'秒後に再試行してください。') : 'しばらくしてから再試行してください。'));
+          btnDl.removeAttribute('disabled');
+          return;
+        }
+        // fallback
+        location.href = fallbackUrl;
       }catch{ btnDl.removeAttribute('disabled'); }
     });
   })();
