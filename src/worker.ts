@@ -224,6 +224,7 @@ export default {
       url.pathname === '/' ||
       url.pathname === '/items' ||
       /^\/items\/[A-Za-z0-9_-]+$/.test(url.pathname) ||
+      /^\/u\/[A-Za-z0-9_-]+$/.test(url.pathname) ||
       url.pathname === '/upload'
     );
     if (isProtectedPage) {
@@ -751,6 +752,8 @@ export default {
       if (url.pathname === '/' || url.pathname === '/items') return renderItems(env, url);
       const m = /^\/items\/([A-Za-z0-9_-]+)$/.exec(url.pathname);
       if (m) return renderItem(env, m[1], req);
+      const mu = /^\/u\/([a-z0-9]{3,32})$/.exec(url.pathname);
+      if (mu) return renderUser(env, mu[1]);
       if (url.pathname === '/upload') return renderUpload(env);
     }
 
@@ -1166,6 +1169,65 @@ async function renderItem(env: Env, id: string, req?: Request): Promise<Response
   </script>
   `;
   return html(layout(it.title || '詳細', body, { isLoggedIn: true, auth: { supaUrl: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY } }));
+}
+
+async function renderUser(env: Env, username: string): Promise<Response> {
+  // プロフィール取得
+  let user: any | null = null;
+  try {
+    const res: any = await env.DB.prepare(`SELECT * FROM users WHERE username = ? LIMIT 1`).bind(username).first();
+    user = res ?? null;
+  } catch {}
+  if (!user) {
+    const body404 = `<h1 class="text-lg font-semibold">ユーザーが見つかりません</h1>
+    <p class="text-gray-500 text-sm">指定のユーザーは存在しません。</p>
+    <p><a class="inline-block px-3 py-1.5 border border-black rounded-md text-black hover:bg-black/5" href="/items">一覧へ戻る</a></p>`;
+    return html(layout('見つかりません', body404));
+  }
+
+  const uid = user.id ?? user.ID ?? '';
+  const display = user.displayName ?? user.DISPLAYNAME ?? username;
+
+  // アイテム取得（公開のみ）
+  let items: any[] = [];
+  try {
+    const res: any = await env.DB.prepare(
+      `SELECT * FROM items WHERE (ownerUserId = ? OR owner_user_id = ? OR OWNER_USER_ID = ?) AND (visibility = 'public' OR VISIBILITY = 'public')
+       ORDER BY COALESCE(createdAt, created_at, '') DESC, rowid DESC LIMIT 100`
+    ).bind(uid, uid, uid).all();
+    const rows: any[] = res?.results ?? res ?? [];
+    items = rows.map((r: any) => ({
+      id: r.id ?? r.ID,
+      title: r.title ?? r.TITLE ?? 'Untitled',
+      category: r.category ?? r.CATEGORY ?? 'OTHER',
+      downloadCount: Number(r.downloadCount ?? r.DOWNLOADCOUNT ?? r.download_count ?? 0),
+      fileKey: r.file_key ?? r.fileKey ?? r.FILE_KEY ?? '',
+      thumbnailKey: r.thumbnail_key ?? r.thumbnailKey ?? r.THUMBNAIL_KEY ?? '',
+      contentType: r.contentType ?? r.CONTENTTYPE ?? r.CONTENT_TYPE ?? '',
+    }));
+  } catch {}
+
+  const cards = items.map((it) => `
+    <div class="border border-gray-200 rounded-lg p-3 bg-white">
+      <div class="bg-gray-100 rounded-md overflow-hidden mb-2 aspect-square">
+        <img class="w-full h-full object-cover block" src="${thumbnailUrl(it)}" alt="thumb" loading="lazy" />
+      </div>
+      <div class="flex justify-between items-center gap-2">
+        <div class="font-semibold">${escapeHtml(it.title)}</div>
+        <a class="inline-block px-3 py-1.5 border border-black rounded-md text-black hover:bg-black/5" href="/items/${escapeHtml(it.id)}">詳細</a>
+      </div>
+      <div class="text-gray-500 text-xs mt-1.5">${escapeHtml(it.category)}</div>
+      <div class="text-gray-500 text-xs mt-1.5">DL: ${Number(it.downloadCount||0)}</div>
+    </div>
+  `).join('');
+
+  const body = `
+  <div>
+    <h1 class="text-lg font-semibold">${escapeHtml(display)} の作品</h1>
+    <div class="text-gray-500 text-sm">@${escapeHtml(username)}</div>
+    <div class="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(240px,1fr))] mt-3">${cards || '<div class="text-gray-500 text-sm">アイテムがありません</div>'}</div>
+  </div>`;
+  return html(layout(`${display} の作品`, body, { isLoggedIn: true, auth: { supaUrl: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY } }));
 }
 
 function mediaMarkup(it: any): string {
