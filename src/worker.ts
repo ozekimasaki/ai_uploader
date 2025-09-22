@@ -818,7 +818,7 @@ export default {
       const m = /^\/items\/([A-Za-z0-9_-]+)$/.exec(url.pathname);
       if (m) return renderItem(env, m[1], req);
       const mu = /^\/u\/([a-z0-9]{3,32})$/.exec(url.pathname);
-      if (mu) return renderUser(env, mu[1]);
+      if (mu) return renderUser(env, mu[1], req);
       if (url.pathname === '/upload') return renderUpload(env);
     }
 
@@ -1250,7 +1250,7 @@ async function renderItem(env: Env, id: string, req?: Request): Promise<Response
   return html(layout(it.title || '詳細', body, { isLoggedIn: true, auth: { supaUrl: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY } }));
 }
 
-async function renderUser(env: Env, username: string): Promise<Response> {
+async function renderUser(env: Env, username: string, req?: Request): Promise<Response> {
   // プロフィール取得
   let user: any | null = null;
   try {
@@ -1267,13 +1267,19 @@ async function renderUser(env: Env, username: string): Promise<Response> {
   const uid = user.id ?? user.ID ?? '';
   const display = user.displayName ?? user.DISPLAYNAME ?? username;
 
-  // アイテム取得（公開のみ）
+  // アイテム取得（本人閲覧時は非公開も含める）
   let items: any[] = [];
   try {
-    const res: any = await env.DB.prepare(
-      `SELECT * FROM items WHERE (ownerUserId = ? OR owner_user_id = ? OR OWNER_USER_ID = ?) AND (visibility = 'public' OR VISIBILITY = 'public')
-       ORDER BY COALESCE(createdAt, created_at, '') DESC, rowid DESC LIMIT 100`
-    ).bind(uid, uid, uid).all();
+    let viewerId = '';
+    if (req) {
+      const authed = await getAuthUser(req, env).catch(()=>null);
+      viewerId = String((authed as any)?.id || '');
+    }
+    const isOwnerView = viewerId && viewerId === uid;
+    const whereVis = isOwnerView ? '1=1' : "(visibility = 'public' OR VISIBILITY = 'public')";
+    const sql = `SELECT * FROM items WHERE (ownerUserId = ? OR owner_user_id = ? OR OWNER_USER_ID = ?) AND ${whereVis}
+                ORDER BY COALESCE(createdAt, created_at, '') DESC, rowid DESC LIMIT 100`;
+    const res: any = await env.DB.prepare(sql).bind(uid, uid, uid).all();
     const rows: any[] = res?.results ?? res ?? [];
     items = rows.map((r: any) => ({
       id: r.id ?? r.ID,
