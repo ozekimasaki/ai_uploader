@@ -24,6 +24,7 @@ function layout(title: string, body: string): string {
   <title>${title}</title>
   <link rel="stylesheet" href="/app.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/plyr@3/dist/plyr.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
   </head><body>
     <header class="border-b border-gray-200 h-14 flex items-center">
       <div class="max-w-[980px] mx-auto px-4 w-full flex justify-between">
@@ -270,6 +271,30 @@ export default {
         const filename = given || fallback;
         const dispo = dl ? 'attachment' : 'inline';
         headers.set('content-disposition', `${dispo}; filename="${filename}"`);
+        // 人気順のためにダウンロード開始でカウント（download パラメータが付与された場合のみ）
+        if (dl) {
+          try {
+            const r: any = await env.DB.prepare(`SELECT id FROM items WHERE fileKey = ? OR file_key = ? LIMIT 1`).bind(key, key).first();
+            const itemId = r?.id ?? r?.ID ?? null;
+            if (itemId) {
+              // 重複防止: 同一IP×同一アイテムで一定時間内の重複カウントを抑止
+              const ip = req.headers.get('cf-connecting-ip') || '0.0.0.0';
+              const name = `dl:${itemId}:${ip}`;
+              try {
+                const id = env.RATE_LIMITER_DO.idFromName(name);
+                const stub = env.RATE_LIMITER_DO.get(id);
+                const allowRes = await stub.fetch('https://do/check?ttl=3600', { method: 'POST' });
+                const allowJson: any = await allowRes.json().catch(()=>({allowed:true}));
+                if (allowJson?.allowed !== false) {
+                  await env.DB.prepare(`UPDATE items SET downloadCount = COALESCE(downloadCount, 0) + 1 WHERE id = ?`).bind(itemId).run();
+                }
+              } catch {
+                // DO失敗時はフォールバックでカウント（ユーザー体験を優先）
+                await env.DB.prepare(`UPDATE items SET downloadCount = COALESCE(downloadCount, 0) + 1 WHERE id = ?`).bind(itemId).run();
+              }
+            }
+          } catch {}
+        }
         return new Response(obj.body, { headers });
       } catch {
         return new Response('error', { status: 500 });
@@ -323,27 +348,46 @@ export class RateLimiter implements DurableObject {
     this.state = state;
   }
   async fetch(request: Request): Promise<Response> {
-    return new Response(JSON.stringify({ allowed: true }), {
-      headers: { 'content-type': 'application/json' },
-    });
+    try {
+      const url = new URL(request.url);
+      if (request.method === 'POST' && url.pathname === '/check') {
+        // body: TTL秒のメモ化チェック（URLクエリまたはデフォルト60秒）
+        const ttl = Number(url.searchParams.get('ttl') || '3600');
+        const key = 'hit';
+        const prev = await this.state.storage.get<number>(key);
+        const now = Date.now();
+        if (prev && now - prev < ttl * 1000) {
+          return new Response(JSON.stringify({ allowed: false }), { headers: { 'content-type': 'application/json' } });
+        }
+        await this.state.storage.put(key, now, { expirationTtl: ttl });
+        return new Response(JSON.stringify({ allowed: true }), { headers: { 'content-type': 'application/json' } });
+      }
+    } catch {}
+    return new Response(JSON.stringify({ allowed: true }), { headers: { 'content-type': 'application/json' } });
   }
 }
 
 async function renderItems(env: Env, url: URL): Promise<Response> {
   const page = Math.max(1, Number(url.searchParams.get('page') || '1'));
   const pageSize = 20;
+  const q = String(url.searchParams.get('q') || '').trim();
+  const categoryParam = String(url.searchParams.get('category') || '').trim().toUpperCase();
+  const tagParam = String(url.searchParams.get('tag') || '').trim();
+  const sort = String(url.searchParams.get('sort') || 'new').trim();
   let items: any[] = [];
   let hasNext = false;
+  const whereParts: string[] = ["visibility = 'public'"];
+  const binds: any[] = [];
+  if (categoryParam) { whereParts.push('(category = ? OR CATEGORY = ? OR UPPER(category) = ?)'); binds.push(categoryParam, categoryParam, categoryParam); }
+  if (q) { whereParts.push('(title LIKE ? OR description LIKE ?)'); const like = `%${q}%`; binds.push(like, like); }
+  if (tagParam) { whereParts.push(`id IN (SELECT it.itemId FROM item_tags it JOIN tags t ON t.id = it.tagId WHERE t.id = ? OR t.label = ?)`); binds.push(tagParam, tagParam); }
+  let orderBy = "COALESCE(createdAt, created_at, '') DESC, rowid DESC";
+  if (sort === 'popular') orderBy = "COALESCE(downloadCount, 0) DESC, COALESCE(createdAt, created_at, '') DESC, rowid DESC";
   try {
     const limit = pageSize + 1;
     const offset = (page - 1) * pageSize;
-    const stmt = env.DB.prepare(
-      `SELECT *
-       FROM items
-       WHERE visibility = 'public'
-       ORDER BY rowid DESC
-       LIMIT ? OFFSET ?`
-    ).bind(limit, offset);
+    const sql = `SELECT * FROM items WHERE ${whereParts.join(' AND ')} ORDER BY ${orderBy} LIMIT ? OFFSET ?`;
+    const stmt = env.DB.prepare(sql).bind(...binds, limit, offset);
     const res: any = await stmt.all();
     const rows: any[] = res?.results ?? res ?? [];
     hasNext = rows.length > pageSize;
@@ -358,6 +402,7 @@ async function renderItems(env: Env, url: URL): Promise<Response> {
       fileKey: r.file_key ?? r.fileKey ?? r.FILE_KEY ?? '',
       thumbnailKey: r.thumbnail_key ?? r.thumbnailKey ?? r.THUMBNAIL_KEY ?? '',
       createdAt: r.created_at ?? r.createdAt ?? r.CREATED_AT ?? null,
+      downloadCount: Number(r.downloadCount ?? r.DOWNLOADCOUNT ?? r.download_count ?? 0),
       tags: (() => {
         const tj = r.tags_json ?? r.TAGS_JSON ?? null;
         if (tj) {
@@ -406,6 +451,7 @@ async function renderItems(env: Env, url: URL): Promise<Response> {
         <a class="inline-block px-3 py-1.5 border border-black rounded-md text-black hover:bg-black/5" href="/items/${escapeHtml(it.id)}">詳細</a>
       </div>
       <div class="text-gray-500 text-xs mt-1.5">${escapeHtml(it.category)}</div>
+      <div class="text-gray-500 text-xs mt-1.5">DL: ${Number(it.downloadCount||0)}</div>
       ${it.tags && it.tags.length ? `<div class=\"mt-1.5 flex flex-wrap gap-1\">${it.tags.map((tg: any) => `<span class=\"text-xs px-2 py-0.5 rounded-full border border-gray-200\">#${escapeHtml(String(tg))}</span>`).join('')}</div>` : ''}
     </div>
   `).join('');
@@ -415,7 +461,35 @@ async function renderItems(env: Env, url: URL): Promise<Response> {
     ${hasNext ? `<a class=\"border border-gray-200 rounded-md px-3 py-1.5\" href="/items?page=${page + 1}">次へ</a>` : ''}
   </div>`;
 
+  // フィルタフォーム（エスケープ過剰を避ける）
+  let tagOptions = '';
+  try {
+    const tRes: any = await env.DB.prepare(`SELECT id, label FROM tags ORDER BY label COLLATE NOCASE LIMIT 100`).all();
+    const tRows: any[] = tRes?.results ?? tRes ?? [];
+    tagOptions = tRows.map((tr: any) => `<option value="${escapeHtml(tr.label ?? tr.LABEL ?? '')}"></option>`).join('');
+  } catch {}
+  const currentQ = escapeHtml(String(url.searchParams.get('q')||''));
+  const currentCat = String(url.searchParams.get('category')||'').toUpperCase();
+  const currentTag = escapeHtml(String(url.searchParams.get('tag')||''));
+  const currentSort = String(url.searchParams.get('sort')||'new');
+  const filters = `
+  <form class="mt-2 mb-3 grid gap-2 md:grid-cols-4" method="get" action="/items">
+    <input class="border border-gray-300 rounded-md px-3 py-2" name="q" placeholder="キーワード" value="${currentQ}"/>
+    <select class="border border-gray-300 rounded-md px-3 py-2" name="category">
+      <option value="">全カテゴリ</option>
+      ${['IMAGE','VIDEO','MUSIC','VOICE','3D','OTHER'].map(c=>`<option value="${c}" ${currentCat===c?'selected':''}>${c}</option>`).join('')}
+    </select>
+    <input class="border border-gray-300 rounded-md px-3 py-2" name="tag" list="tags" placeholder="タグ" value="${currentTag}"/>
+    <select class="border border-gray-300 rounded-md px-3 py-2" name="sort">
+      <option value="new" ${currentSort==='new'?'selected':''}>新着</option>
+      <option value="popular" ${currentSort==='popular'?'selected':''}>人気</option>
+    </select>
+    <div class="md:col-span-4"><button class="mt-1 inline-block px-4 py-2 border border-black rounded-md text-black hover:bg-black/5">絞り込み</button></div>
+    <datalist id="tags">${tagOptions}</datalist>
+  </form>`;
+
   const body = `<h1 class="text-lg font-semibold">一覧</h1>
+    ${filters}
     <div class="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(240px,1fr))] mt-3">${cards || '<div class="text-gray-500 text-sm">アイテムがありません</div>'}</div>
     ${pager}`;
   return html(layout('一覧', body));
@@ -451,6 +525,7 @@ async function renderItem(env: Env, id: string): Promise<Response> {
     thumbnailKey: row.thumbnail_key ?? row.thumbnailKey ?? row.THUMBNAIL_KEY ?? '',
     contentType: row.contentType ?? row.CONTENTTYPE ?? row.CONTENT_TYPE ?? '',
     extension: row.extension ?? row.EXTENSION ?? '',
+    downloadCount: Number(row.downloadCount ?? row.DOWNLOADCOUNT ?? row.download_count ?? 0),
     createdAt: row.created_at ?? row.CREATED_AT ?? row.createdAt ?? null,
   };
 
@@ -475,17 +550,22 @@ async function renderItem(env: Env, id: string): Promise<Response> {
       <div class="text-gray-500 text-xs">サイズ</div><div>${formatBytes(it.sizeBytes)}</div>
       <div class="text-gray-500 text-xs">作成日</div><div>${formatDate(it.createdAt)}</div>
       <div class="text-gray-500 text-xs">ファイル名</div><div>${escapeHtml(it.originalFilename || '')}</div>
+      <div class="text-gray-500 text-xs">ダウンロード</div><div>${Number(it.downloadCount||0)}</div>
     </div>
   </div>`;
 
+  const shareUrl = `https://x.com/intent/tweet?url=${encodeURIComponent(globalThis.location?.href||'')}&text=${encodeURIComponent(it.title||'')}`;
+  const lineUrl = `https://line.me/R/msg/text/?${encodeURIComponent((it.title||'')+' '+(globalThis.location?.href||''))}`;
+  const fbUrl = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(globalThis.location?.href||'')}`;
   const actions = `
   <div class="flex gap-2 flex-wrap mt-2.5">
-    <button class="inline-block px-3 py-1.5 border border-black rounded-md text-black hover:bg-black/5" id="btnCopy">URLをコピー</button>
     <a class="inline-block px-3 py-1.5 border border-black rounded-md text-black hover:bg-black/5" href="/api/file?k=${encodeURIComponent(it.fileKey)}&download=1&name=${encodeURIComponent(it.originalFilename || it.title || 'download')}">ダウンロード</a>
   </div>`;
 
   const desc = it.description ? `<div class="mt-4"><div class=\"text-gray-500 text-xs mb-1\">説明</div><p class="whitespace-pre-wrap">${escapeHtml(it.description)}</p></div>` : '';
-  const prm = it.prompt ? `<div class="mt-4"><div class=\"flex items-center justify-between\"><div class=\"text-gray-500 text-xs mb-1\">Prompt</div><button id=\"btnCopyPrompt\" class=\"inline-block px-2 py-1 text-xs border border-black rounded-md text-black hover:bg-black/5\">コピー</button></div><pre id=\"promptText\" class=\"whitespace-pre-wrap text-sm\">${escapeHtml(it.prompt)}</pre></div>` : '';
+  const prm = it.prompt ? `<div class=\"mt-4\"><div class=\"flex items-center justify-between\"><div class=\"text-gray-500 text-xs mb-1\">Prompt</div><button id=\"btnCopyPrompt\" class=\"inline-block px-2 py-1 text-xs border border-black rounded-md text-black hover:bg-black/5\">コピー</button></div><pre id=\"promptText\" class=\"whitespace-pre-wrap text-sm\">${escapeHtml(it.prompt)}</pre>
+  <div class=\"mt-3\">\n    <div class=\"text-gray-500 text-xs mb-1\">共有</div>\n    <div class=\"flex items-center gap-2\">\n      <a id=\"btnShareX\" class=\"inline-flex items-center justify-center w-9 h-9 rounded-md border border-gray-300 text-gray-700 hover:bg-black/5\" target=\"_blank\" rel=\"noreferrer\" href=\"#\" title=\"Xでシェア\"><i class=\"fa-brands fa-x-twitter\"></i></a>\n      <a id=\"btnShareLine\" class=\"inline-flex items-center justify-center w-9 h-9 rounded-md border border-gray-300 text-gray-700 hover:bg-black/5\" target=\"_blank\" rel=\"noreferrer\" href=\"#\" title=\"LINEでシェア\"><i class=\"fa-brands fa-line\"></i></a>\n      <a id=\"btnShareFb\" class=\"inline-flex items-center justify-center w-9 h-9 rounded-md border border-gray-300 text-gray-700 hover:bg-black/5\" target=\"_blank\" rel=\"noreferrer\" href=\"#\" title=\"Facebookでシェア\"><i class=\"fa-brands fa-facebook\"></i></a>\n      <button id=\"btnCopyUrl\" class=\"group relative inline-flex items-center justify-center w-9 h-9 rounded-md border border-black text-black hover:bg-black/5\" title=\"クリックでコピー\"><i class=\"fa-solid fa-link\"></i><span class=\"pointer-events-none absolute -top-7 opacity-0 group-hover:opacity-100 transition bg-black text-white text-[10px] rounded px-2 py-0.5\">コピー</span></button>\n    </div>\n  </div>
+  </div>` : '';
 
   const body = `
   <div class="flex items-start gap-4">
@@ -502,14 +582,25 @@ async function renderItem(env: Env, id: string): Promise<Response> {
   </div>
   <script>
   (function(){
-    const btnCopy=document.getElementById('btnCopy');
-    btnCopy?.addEventListener('click',async()=>{
-      try{ await navigator.clipboard.writeText(location.href); btnCopy.textContent='コピーしました'; setTimeout(()=>btnCopy.textContent='URLをコピー',1500);}catch{}
-    });
+    // 動的にSNSリンクのURLを補完（SSR時のorigin不定対策）
+    try{
+      const u = encodeURIComponent(location.href);
+      const t = encodeURIComponent(document.title||'');
+      const x = document.getElementById('btnShareX');
+      const l = document.getElementById('btnShareLine');
+      const f = document.getElementById('btnShareFb');
+      if (x) x.setAttribute('href', 'https://x.com/intent/tweet?url=' + u + '&text=' + t);
+      if (l) l.setAttribute('href', 'https://line.me/R/msg/text/?' + t + '%20' + u);
+      if (f) f.setAttribute('href', 'https://www.facebook.com/sharer/sharer.php?u=' + u);
+    }catch{}
     const btnCopyPrompt=document.getElementById('btnCopyPrompt');
     const promptEl=document.getElementById('promptText');
     btnCopyPrompt?.addEventListener('click',async()=>{
       try{ const text=(promptEl?.textContent||''); await navigator.clipboard.writeText(text); btnCopyPrompt.textContent='コピーしました'; setTimeout(()=>btnCopyPrompt.textContent='コピー',1500);}catch{}
+    });
+    const btnCopyUrl=document.getElementById('btnCopyUrl');
+    btnCopyUrl?.addEventListener('click', async()=>{
+      try{ await navigator.clipboard.writeText(location.href); const prev=btnCopyUrl.getAttribute('title')||''; btnCopyUrl.setAttribute('title','コピーしました'); setTimeout(()=>btnCopyUrl.setAttribute('title', prev||'クリックでコピー'), 1500);}catch{}
     });
   })();
   </script>
