@@ -809,6 +809,72 @@ export default {
       }
     }
 
+    // Debug: get users by username and viewer
+    if (url.pathname === '/api/debug/user' && req.method === 'GET') {
+      try {
+        const authed = await getAuthUser(req, env);
+        if (!authed) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'content-type': 'application/json' } });
+        const viewerId = String((authed as any)?.id || '');
+        const u = String(url.searchParams.get('u') || '').trim();
+        await ensureTables(env);
+        const usersRes: any = await env.DB.prepare(`SELECT * FROM users WHERE username = ? LIMIT 5`).bind(u).all();
+        const users: any[] = usersRes?.results ?? usersRes ?? [];
+        const viewerRow: any = await env.DB.prepare(`SELECT * FROM users WHERE id = ? LIMIT 1`).bind(viewerId).first();
+        return new Response(JSON.stringify({ viewerId, normViewer: normalizeUsernameFromId(viewerId), param: u, users, viewerRow }), { headers: { 'content-type': 'application/json' } });
+      } catch (e: any) {
+        return new Response(JSON.stringify({ error: 'internal', message: String(e?.message || e) }), { status: 500, headers: { 'content-type': 'application/json' } });
+      }
+    }
+
+    // Debug: items list as used by user page logic
+    if (url.pathname === '/api/debug/user-items' && req.method === 'GET') {
+      try {
+        const authed = await getAuthUser(req, env);
+        if (!authed) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'content-type': 'application/json' } });
+        const viewerId = String((authed as any)?.id || '');
+        const u = String(url.searchParams.get('u') || '').trim();
+        await ensureTables(env);
+        const normViewer = viewerId ? normalizeUsernameFromId(viewerId) : '';
+        let targetUser: any = null;
+        if (viewerId && normViewer && normViewer === u) {
+          targetUser = await env.DB.prepare(`SELECT * FROM users WHERE id = ? LIMIT 1`).bind(viewerId).first();
+          if (!targetUser) {
+            await env.DB.prepare(`INSERT OR IGNORE INTO users (id, username, displayName) VALUES (?, ?, ?)`)
+              .bind(viewerId, normViewer, '').run();
+            targetUser = await env.DB.prepare(`SELECT * FROM users WHERE id = ? LIMIT 1`).bind(viewerId).first();
+          }
+        } else {
+          targetUser = await env.DB.prepare(`SELECT * FROM users WHERE username = ? LIMIT 1`).bind(u).first();
+        }
+        const uid = targetUser?.id ?? targetUser?.ID ?? '';
+        const isOwnerView = viewerId && uid && viewerId === uid;
+        const whereVis = isOwnerView ? '1=1' : "(visibility = 'public' OR VISIBILITY = 'public')";
+
+        const info: any = await env.DB.prepare(`PRAGMA table_info(items)`).all();
+        const rows: any[] = info?.results ?? info ?? [];
+        const names = new Set<string>(rows.map((r: any) => String(r.name ?? r.NAME ?? '').toLowerCase()));
+        const ownerConds: string[] = [];
+        const binds: any[] = [];
+        if (names.has('owneruserid')) { ownerConds.push('ownerUserId = ?'); binds.push(uid); }
+        if (names.has('owner_user_id')) { ownerConds.push('owner_user_id = ?'); binds.push(uid); }
+        if (!ownerConds.length) { ownerConds.push('ownerUserId = ?'); binds.push(uid); }
+
+        const sql = `SELECT *, COALESCE(createdAt, created_at, updatedAt, updated_at, '') as created_order
+                     FROM items
+                     WHERE (${ownerConds.join(' OR ')}) AND ${whereVis}
+                     ORDER BY created_order DESC, rowid DESC LIMIT 100`;
+        const res: any = await env.DB.prepare(sql).bind(...binds).all();
+        const items: any[] = res?.results ?? res ?? [];
+        return new Response(JSON.stringify({
+          viewerId, username: u, normViewer, targetUser: { id: uid }, isOwnerView,
+          ownerConds, bindsCount: binds.length, count: items.length,
+          sample: items.slice(0, 5).map((r: any)=>({ id: r.id ?? r.ID, title: r.title ?? r.TITLE, visibility: r.visibility ?? r.VISIBILITY }))
+        }), { headers: { 'content-type': 'application/json' } });
+      } catch (e: any) {
+        return new Response(JSON.stringify({ error: 'internal', message: String(e?.message || e) }), { status: 500, headers: { 'content-type': 'application/json' } });
+      }
+    }
+
     if (url.pathname === '/api/thumbnail' && req.method === 'GET') {
       // protect thumbnail behind login (要ログイン仕様)
       const user = await getAuthUser(req, env);
