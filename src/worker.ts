@@ -1277,9 +1277,9 @@ async function renderUser(env: Env, username: string, req?: Request): Promise<Re
     }
     const isOwnerView = viewerId && viewerId === uid;
     const whereVis = isOwnerView ? '1=1' : "(visibility = 'public' OR VISIBILITY = 'public')";
-    const sql = `SELECT * FROM items WHERE (ownerUserId = ? OR owner_user_id = ? OR OWNER_USER_ID = ?) AND ${whereVis}
+    const sql = `SELECT * FROM items WHERE (ownerUserId = ? OR owner_user_id = ? OR OWNER_USER_ID = ? OR OWNERUSERID = ?) AND ${whereVis}
                 ORDER BY COALESCE(createdAt, created_at, '') DESC, rowid DESC LIMIT 100`;
-    const res: any = await env.DB.prepare(sql).bind(uid, uid, uid).all();
+    const res: any = await env.DB.prepare(sql).bind(uid, uid, uid, uid).all();
     const rows: any[] = res?.results ?? res ?? [];
     items = rows.map((r: any) => ({
       id: r.id ?? r.ID,
