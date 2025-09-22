@@ -1275,24 +1275,27 @@ async function renderItem(env: Env, id: string, req?: Request): Promise<Response
 async function renderUser(env: Env, username: string, req?: Request): Promise<Response> {
   // ビューア情報
   let viewerId = '';
-  let viewerUsername = '';
   if (req) {
     try {
       const authed = await getAuthUser(req, env).catch(()=>null);
       viewerId = String((authed as any)?.id || '');
-      if (viewerId) {
-        const row: any = await env.DB.prepare(`SELECT username, displayName FROM users WHERE id = ? LIMIT 1`).bind(viewerId).first();
-        viewerUsername = String(row?.username ?? row?.USERNAME ?? '');
-      }
     } catch {}
   }
 
-  // 対象ユーザーの特定（本人ページなら viewerId を採用して確実化）
+  // 対象ユーザーの特定（本人ページなら正規化ユーザー名で一致を確認し viewerId を採用）
   let targetUser: any | null = null;
   try {
-    if (viewerId && viewerUsername && viewerUsername === username) {
+    const normViewer = viewerId ? normalizeUsernameFromId(viewerId) : '';
+    if (viewerId && normViewer && normViewer === username) {
       const res: any = await env.DB.prepare(`SELECT * FROM users WHERE id = ? LIMIT 1`).bind(viewerId).first();
       targetUser = res ?? null;
+      if (!targetUser) {
+        // 万一行が無ければ作成
+        await env.DB.prepare(`INSERT OR IGNORE INTO users (id, username, displayName) VALUES (?, ?, ?)`)
+          .bind(viewerId, normViewer, '').run();
+        const r2: any = await env.DB.prepare(`SELECT * FROM users WHERE id = ? LIMIT 1`).bind(viewerId).first();
+        targetUser = r2 ?? null;
+      }
     } else {
       const res: any = await env.DB.prepare(`SELECT * FROM users WHERE username = ? LIMIT 1`).bind(username).first();
       targetUser = res ?? null;
@@ -1313,8 +1316,11 @@ async function renderUser(env: Env, username: string, req?: Request): Promise<Re
   try {
     const isOwnerView = viewerId && viewerId === uid;
     const whereVis = isOwnerView ? '1=1' : "(visibility = 'public' OR VISIBILITY = 'public')";
-    const sql = `SELECT * FROM items WHERE (ownerUserId = ? OR owner_user_id = ? OR OWNER_USER_ID = ? OR OWNERUSERID = ?) AND ${whereVis}
-                ORDER BY COALESCE(createdAt, created_at, '') DESC, rowid DESC LIMIT 100`;
+    // createdAt/created_at混在環境で新しい方を優先的に並べ替え
+    const sql = `SELECT *, COALESCE(createdAt, created_at, updatedAt, updated_at, '') as created_order
+                 FROM items
+                 WHERE (ownerUserId = ? OR owner_user_id = ? OR OWNER_USER_ID = ? OR OWNERUSERID = ?) AND ${whereVis}
+                 ORDER BY created_order DESC, rowid DESC LIMIT 100`;
     const res: any = await env.DB.prepare(sql).bind(uid, uid, uid, uid).all();
     const rows: any[] = res?.results ?? res ?? [];
     items = rows.map((r: any) => ({
