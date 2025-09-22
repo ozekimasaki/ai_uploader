@@ -974,7 +974,7 @@ async function renderItems(env: Env, url: URL): Promise<Response> {
   return html(layout('一覧', body, { isLoggedIn: true, auth: { supaUrl: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY } }));
 }
 
-async function renderItem(env: Env, id: string): Promise<Response> {
+async function renderItem(env: Env, id: string, req?: Request): Promise<Response> {
   // 1) 取得
   let row: any | null = null;
   try {
@@ -989,6 +989,25 @@ async function renderItem(env: Env, id: string): Promise<Response> {
     <p><a class="inline-block px-3 py-1.5 border border-black rounded-md text-black hover:bg-black/5" href="/items">一覧へ戻る</a></p>`;
     return html(layout('見つかりません', body404));
   }
+
+  // 非公開アイテムは所有者のみ閲覧可
+  try {
+    const visibilityRaw = String(row.visibility ?? row.VISIBILITY ?? 'public').toLowerCase();
+    const ownerId = row.ownerUserId ?? row.OWNERUSERID ?? row.owner_user_id ?? row.OWNER_USER_ID ?? '';
+    if (visibilityRaw === 'private') {
+      let viewerId = '';
+      if (req) {
+        const authed = await getAuthUser(req, env).catch(()=>null);
+        viewerId = String((authed as any)?.id || '');
+      }
+      if (!viewerId || viewerId !== ownerId) {
+        const body404 = `<h1 class=\"text-lg font-semibold\">見つかりません</h1>
+        <p class=\"text-gray-500 text-sm\">アイテムが存在しないか、非公開です。</p>
+        <p><a class=\"inline-block px-3 py-1.5 border border-black rounded-md text-black hover:bg-black/5\" href=\"/items\">一覧へ戻る</a></p>`;
+        return html(layout('見つかりません', body404));
+      }
+    }
+  } catch {}
 
   const it = {
     id: row.id ?? row.ID,
@@ -1036,9 +1055,27 @@ async function renderItem(env: Env, id: string): Promise<Response> {
   const shareUrl = `https://x.com/intent/tweet?url=${encodeURIComponent(globalThis.location?.href||'')}&text=${encodeURIComponent(it.title||'')}`;
   const lineUrl = `https://line.me/R/msg/text/?${encodeURIComponent((it.title||'')+' '+(globalThis.location?.href||''))}`;
   const fbUrl = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(globalThis.location?.href||'')}`;
+  // 所有者向け: 公開/非公開トグル
+  let ownerControls = '';
+  try {
+    let viewerId = '';
+    if (req) {
+      const authed = await getAuthUser(req, env).catch(()=>null);
+      viewerId = String((authed as any)?.id || '');
+    }
+    if (viewerId && viewerId === it.ownerUserId) {
+      const vis = String(it.visibility || '').toLowerCase() === 'public' ? 'public' : 'private';
+      const btnLabel = vis === 'public' ? '非公開にする' : '公開する';
+      ownerControls = `
+      <button id=\"btnToggleVis\" class=\"inline-block px-3 py-1.5 border border-gray-700 rounded-md text-gray-800 hover:bg-black/5\" data-current=\"${vis}\">${btnLabel}</button>
+      <span id=\"visStatus\" class=\"text-xs text-gray-500 ml-1\">現在: ${vis === 'public' ? '公開' : '非公開'}</span>`;
+    }
+  } catch {}
+
   const actions = `
-  <div class="flex gap-2 flex-wrap mt-2.5">
-    <button id="btnDl" class="inline-block px-3 py-1.5 border border-black rounded-md text-black hover:bg-black/5">ダウンロード</button>
+  <div class=\"flex gap-2 flex-wrap mt-2.5\">
+    <button id=\"btnDl\" class=\"inline-block px-3 py-1.5 border border-black rounded-md text-black hover:bg-black/5\">ダウンロード</button>
+    ${ownerControls}
   </div>`;
 
   const desc = it.description ? `<div class="mt-4"><div class=\"text-gray-500 text-xs mb-1\">説明</div><p class="whitespace-pre-wrap">${escapeHtml(it.description)}</p></div>` : '';
@@ -1105,6 +1142,25 @@ async function renderItem(env: Env, id: string): Promise<Response> {
         // fallback
         location.href = fallbackUrl;
       }catch{ btnDl.removeAttribute('disabled'); }
+    });
+    // toggle visibility for owner
+    const btnToggle = document.getElementById('btnToggleVis');
+    btnToggle?.addEventListener('click', async()=>{
+      try{
+        btnToggle.setAttribute('disabled','true');
+        const cur = String(btnToggle.getAttribute('data-current')||'private');
+        const nextVis = cur === 'public' ? 'private' : 'public';
+        const res = await fetch('/api/items/' + encodeURIComponent('${escapeHtml(String(it.id))}') + '/publish', {
+          method:'POST',
+          headers:{'content-type':'application/json','accept':'application/json'},
+          body: JSON.stringify({ visibility: nextVis })
+        });
+        if (res.ok) { location.reload(); return; }
+        if (res.status === 403) { alert('権限がありません'); btnToggle.removeAttribute('disabled'); return; }
+        if (res.status === 404) { alert('アイテムが見つかりません'); btnToggle.removeAttribute('disabled'); return; }
+        if (res.status === 401) { location.href='/?login=1'; return; }
+        alert('更新に失敗しました');
+      }catch{ btnToggle?.removeAttribute('disabled'); }
     });
   })();
   </script>
