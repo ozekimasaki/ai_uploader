@@ -531,6 +531,45 @@ export default {
       }
     }
 
+    // delete item (owner only)
+    {
+      const m = /^\/api\/items\/([A-Za-z0-9_-]+)$/.exec(url.pathname);
+      if (m && req.method === 'DELETE') {
+        const authed = await getAuthUser(req, env);
+        if (!authed) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'content-type': 'application/json' } });
+        const uid = String((authed as any)?.id || '');
+        const id = m[1];
+        try {
+          await ensureTables(env);
+          const row: any = await env.DB.prepare(`SELECT * FROM items WHERE id = ? LIMIT 1`).bind(id).first();
+          if (!row) return new Response(JSON.stringify({ error: 'not_found' }), { status: 404, headers: { 'content-type': 'application/json' } });
+          const owner = row.ownerUserId ?? row.OWNERUSERID ?? row.owner_user_id ?? row.OWNER_USER_ID ?? '';
+          if (!uid || owner !== uid) {
+            return new Response(JSON.stringify({ error: 'forbidden' }), { status: 403, headers: { 'content-type': 'application/json' } });
+          }
+          // Delete R2 objects (by prefix, then explicit keys as fallback)
+          try {
+            const prefix = `items/${id}/`;
+            const listing: any = await (env.R2 as any).list({ prefix });
+            const objs: any[] = (listing?.objects ?? listing) || [];
+            for (const o of objs) {
+              const k = o?.key || o?.name || '';
+              if (k) await env.R2.delete(k);
+            }
+          } catch {}
+          try { const fk = row.file_key ?? row.fileKey ?? row.FILE_KEY ?? ''; if (fk) await env.R2.delete(fk); } catch {}
+          try { const tk = row.thumbnail_key ?? row.thumbnailKey ?? row.THUMBNAIL_KEY ?? ''; if (tk) await env.R2.delete(tk); } catch {}
+
+          // Delete DB rows
+          try { await env.DB.prepare(`DELETE FROM item_tags WHERE itemId = ?`).bind(id).run(); } catch {}
+          await env.DB.prepare(`DELETE FROM items WHERE id = ?`).bind(id).run();
+          return new Response(JSON.stringify({ ok: true, id }), { headers: { 'content-type': 'application/json' } });
+        } catch (e: any) {
+          return new Response(JSON.stringify({ error: 'internal', message: String(e?.message || e) }), { status: 500, headers: { 'content-type': 'application/json' } });
+        }
+      }
+    }
+
     // issue download URL (signed-like via token) - login required
     {
       const m = /^\/api\/items\/([A-Za-z0-9_-]+)\/download-url$/.exec(url.pathname);
@@ -1102,9 +1141,10 @@ async function renderItem(env: Env, id: string, req?: Request): Promise<Response
   } catch {}
 
   const actions = `
-  <div class=\"flex gap-2 flex-wrap mt-2.5\">
-    <button id=\"btnDl\" class=\"inline-block px-3 py-1.5 border border-black rounded-md text-black hover:bg-black/5\">ダウンロード</button>
+  <div class="flex gap-2 flex-wrap mt-2.5">
+    <button id="btnDl" class="inline-block px-3 py-1.5 border border-black rounded-md text-black hover:bg-black/5">ダウンロード</button>
     ${ownerControls}
+    ${ownerControls ? '<button id="btnDelete" class="inline-block px-3 py-1.5 border border-red-600 text-red-700 rounded-md hover:bg-red-50">削除</button>' : ''}
   </div>`;
 
   const desc = it.description ? `<div class="mt-4"><div class=\"text-gray-500 text-xs mb-1\">説明</div><p class="whitespace-pre-wrap">${escapeHtml(it.description)}</p></div>` : '';
@@ -1190,6 +1230,19 @@ async function renderItem(env: Env, id: string, req?: Request): Promise<Response
         if (res.status === 401) { location.href='/?login=1'; return; }
         alert('更新に失敗しました');
       }catch{ btnToggle?.removeAttribute('disabled'); }
+    });
+    const btnDelete = document.getElementById('btnDelete');
+    btnDelete?.addEventListener('click', async()=>{
+      try{
+        if (!confirm('このアイテムを削除します。よろしいですか？')) return;
+        btnDelete.setAttribute('disabled','true');
+        const res = await fetch('/api/items/' + encodeURIComponent('${escapeHtml(String(it.id))}'), { method:'DELETE', headers:{'accept':'application/json'} });
+        if (res.ok) { location.href = '/items'; return; }
+        if (res.status === 403) { alert('権限がありません'); btnDelete.removeAttribute('disabled'); return; }
+        if (res.status === 404) { alert('アイテムが見つかりません'); btnDelete.removeAttribute('disabled'); return; }
+        if (res.status === 401) { location.href='/?login=1'; return; }
+        alert('削除に失敗しました');
+      }catch{ btnDelete?.removeAttribute('disabled'); }
     });
   })();
   </script>
