@@ -1273,30 +1273,44 @@ async function renderItem(env: Env, id: string, req?: Request): Promise<Response
 }
 
 async function renderUser(env: Env, username: string, req?: Request): Promise<Response> {
-  // プロフィール取得
-  let user: any | null = null;
+  // ビューア情報
+  let viewerId = '';
+  let viewerUsername = '';
+  if (req) {
+    try {
+      const authed = await getAuthUser(req, env).catch(()=>null);
+      viewerId = String((authed as any)?.id || '');
+      if (viewerId) {
+        const row: any = await env.DB.prepare(`SELECT username, displayName FROM users WHERE id = ? LIMIT 1`).bind(viewerId).first();
+        viewerUsername = String(row?.username ?? row?.USERNAME ?? '');
+      }
+    } catch {}
+  }
+
+  // 対象ユーザーの特定（本人ページなら viewerId を採用して確実化）
+  let targetUser: any | null = null;
   try {
-    const res: any = await env.DB.prepare(`SELECT * FROM users WHERE username = ? LIMIT 1`).bind(username).first();
-    user = res ?? null;
+    if (viewerId && viewerUsername && viewerUsername === username) {
+      const res: any = await env.DB.prepare(`SELECT * FROM users WHERE id = ? LIMIT 1`).bind(viewerId).first();
+      targetUser = res ?? null;
+    } else {
+      const res: any = await env.DB.prepare(`SELECT * FROM users WHERE username = ? LIMIT 1`).bind(username).first();
+      targetUser = res ?? null;
+    }
   } catch {}
-  if (!user) {
-    const body404 = `<h1 class="text-lg font-semibold">ユーザーが見つかりません</h1>
-    <p class="text-gray-500 text-sm">指定のユーザーは存在しません。</p>
-    <p><a class="inline-block px-3 py-1.5 border border-black rounded-md text-black hover:bg-black/5" href="/items">一覧へ戻る</a></p>`;
+  if (!targetUser) {
+    const body404 = `<h1 class=\"text-lg font-semibold\">ユーザーが見つかりません</h1>
+    <p class=\"text-gray-500 text-sm\">指定のユーザーは存在しません。</p>
+    <p><a class=\"inline-block px-3 py-1.5 border border-black rounded-md text-black hover:bg-black/5\" href=\"/items\">一覧へ戻る</a></p>`;
     return html(layout('見つかりません', body404));
   }
 
-  const uid = user.id ?? user.ID ?? '';
-  const display = user.displayName ?? user.DISPLAYNAME ?? username;
+  const uid = targetUser.id ?? targetUser.ID ?? '';
+  const display = targetUser.displayName ?? targetUser.DISPLAYNAME ?? username;
 
   // アイテム取得（本人閲覧時は非公開も含める）
   let items: any[] = [];
   try {
-    let viewerId = '';
-    if (req) {
-      const authed = await getAuthUser(req, env).catch(()=>null);
-      viewerId = String((authed as any)?.id || '');
-    }
     const isOwnerView = viewerId && viewerId === uid;
     const whereVis = isOwnerView ? '1=1' : "(visibility = 'public' OR VISIBILITY = 'public')";
     const sql = `SELECT * FROM items WHERE (ownerUserId = ? OR owner_user_id = ? OR OWNER_USER_ID = ? OR OWNERUSERID = ?) AND ${whereVis}
@@ -1603,7 +1617,7 @@ async function ensureTables(env: Env): Promise<void> {
   await env.DB.prepare(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
-      username TEXT NOT NULL,
+      username TEXT NOT NULL UNIQUE,
       displayName TEXT,
       avatarUrl TEXT,
       createdAt TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
