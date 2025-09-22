@@ -525,42 +525,50 @@ export default {
           if (!fileKey) return new Response(JSON.stringify({ error: 'bad_item' }), { status: 400, headers: { 'content-type': 'application/json' } });
 
           // rate limit: per IP+user+item
-          const ip = req.headers.get('cf-connecting-ip') || '0.0.0.0';
-          const windowSec = 60;
-          const perKeyLimit = Number(env.RATE_LIMIT_DOWNLOAD_PER_MINUTE || 10);
-          const do1 = env.RATE_LIMITER_DO.get(env.RATE_LIMITER_DO.idFromName(`rate:${id}:${userId}:${ip}`));
-          const r1 = await do1.fetch(`https://do/limit?window=${windowSec}&limit=${perKeyLimit}`, { method: 'POST' });
-          const rj1: any = await r1.json().catch(()=>({ allowed: true }));
-          if (rj1?.allowed === false) {
-            const retrySec = Math.max(1, Math.ceil((Number(rj1.resetAt||0) - Date.now())/1000));
-            const h = new Headers({ 'content-type':'application/json', 'retry-after': String(retrySec) });
-            return new Response(JSON.stringify({ error: 'rate_limited', scope: 'item', resetAt: rj1.resetAt }), { status: 429, headers: h });
-          }
+          try {
+            const ip = req.headers.get('cf-connecting-ip') || '0.0.0.0';
+            const windowSec = 60;
+            const perKeyLimit = Number(env.RATE_LIMIT_DOWNLOAD_PER_MINUTE || 10);
+            const do1 = env.RATE_LIMITER_DO.get(env.RATE_LIMITER_DO.idFromName(`rate:${id}:${userId}:${ip}`));
+            const r1 = await do1.fetch(`https://do/limit?window=${windowSec}&limit=${perKeyLimit}`, { method: 'POST' });
+            const rj1: any = await r1.json().catch(()=>({ allowed: true }));
+            if (rj1?.allowed === false) {
+              const retrySec = Math.max(1, Math.ceil((Number(rj1.resetAt||0) - Date.now())/1000));
+              const h = new Headers({ 'content-type':'application/json', 'retry-after': String(retrySec) });
+              return new Response(JSON.stringify({ error: 'rate_limited', scope: 'item', resetAt: rj1.resetAt }), { status: 429, headers: h });
+            }
+          } catch {}
 
           // user-scope
           const perUser = Number(env.RATE_LIMIT_DOWNLOAD_PER_USER_PER_MINUTE || 5);
           if (perUser > 0) {
-            const do2 = env.RATE_LIMITER_DO.get(env.RATE_LIMITER_DO.idFromName(`rate-user:${userId}`));
-            const r2 = await do2.fetch(`https://do/limit?window=${windowSec}&limit=${perUser}`, { method: 'POST' });
-            const rj2: any = await r2.json().catch(()=>({ allowed: true }));
-            if (rj2?.allowed === false) {
-              const retrySec = Math.max(1, Math.ceil((Number(rj2.resetAt||0) - Date.now())/1000));
-              const h = new Headers({ 'content-type':'application/json', 'retry-after': String(retrySec) });
-              return new Response(JSON.stringify({ error: 'rate_limited', scope: 'user', resetAt: rj2.resetAt }), { status: 429, headers: h });
-            }
+            try {
+              const windowSec = 60;
+              const do2 = env.RATE_LIMITER_DO.get(env.RATE_LIMITER_DO.idFromName(`rate-user:${userId}`));
+              const r2 = await do2.fetch(`https://do/limit?window=${windowSec}&limit=${perUser}`, { method: 'POST' });
+              const rj2: any = await r2.json().catch(()=>({ allowed: true }));
+              if (rj2?.allowed === false) {
+                const retrySec = Math.max(1, Math.ceil((Number(rj2.resetAt||0) - Date.now())/1000));
+                const h = new Headers({ 'content-type':'application/json', 'retry-after': String(retrySec) });
+                return new Response(JSON.stringify({ error: 'rate_limited', scope: 'user', resetAt: rj2.resetAt }), { status: 429, headers: h });
+              }
+            } catch {}
           }
 
           // global-scope
           const perGlobal = Number(env.RATE_LIMIT_GLOBAL_DOWNLOAD_PER_MINUTE || 100);
           if (perGlobal > 0) {
-            const do3 = env.RATE_LIMITER_DO.get(env.RATE_LIMITER_DO.idFromName(`rate-global`));
-            const r3 = await do3.fetch(`https://do/limit?window=${windowSec}&limit=${perGlobal}`, { method: 'POST' });
-            const rj3: any = await r3.json().catch(()=>({ allowed: true }));
-            if (rj3?.allowed === false) {
-              const retrySec = Math.max(1, Math.ceil((Number(rj3.resetAt||0) - Date.now())/1000));
-              const h = new Headers({ 'content-type':'application/json', 'retry-after': String(retrySec) });
-              return new Response(JSON.stringify({ error: 'rate_limited', scope: 'global', resetAt: rj3.resetAt }), { status: 429, headers: h });
-            }
+            try {
+              const windowSec = 60;
+              const do3 = env.RATE_LIMITER_DO.get(env.RATE_LIMITER_DO.idFromName(`rate-global`));
+              const r3 = await do3.fetch(`https://do/limit?window=${windowSec}&limit=${perGlobal}`, { method: 'POST' });
+              const rj3: any = await r3.json().catch(()=>({ allowed: true }));
+              if (rj3?.allowed === false) {
+                const retrySec = Math.max(1, Math.ceil((Number(rj3.resetAt||0) - Date.now())/1000));
+                const h = new Headers({ 'content-type':'application/json', 'retry-after': String(retrySec) });
+                return new Response(JSON.stringify({ error: 'rate_limited', scope: 'global', resetAt: rj3.resetAt }), { status: 429, headers: h });
+              }
+            } catch {}
           }
 
           // TTL
@@ -571,8 +579,10 @@ export default {
 
           // token create
           const token = crypto.randomUUID().replace(/-/g,'');
-          const tokenDo = env.RATE_LIMITER_DO.get(env.RATE_LIMITER_DO.idFromName(`dl-token:${token}`));
-          await tokenDo.fetch('https://do/token/create', { method: 'POST', headers: { 'content-type':'application/json' }, body: JSON.stringify({ itemId: id, userId, fileKey, expireAtMs, oneTime: true }) });
+          try {
+            const tokenDo = env.RATE_LIMITER_DO.get(env.RATE_LIMITER_DO.idFromName(`dl-token:${token}`));
+            await tokenDo.fetch('https://do/token/create', { method: 'POST', headers: { 'content-type':'application/json' }, body: JSON.stringify({ itemId: id, userId, fileKey, expireAtMs, oneTime: true }) });
+          } catch {}
 
           const given = row.original_filename ?? row.originalFilename ?? '';
           const u = new URL('/api/file', url.origin);
@@ -660,8 +670,10 @@ export default {
           if (!dat || !dat.fileKey || dat.expireAtMs < Date.now() || dat.used) return new Response('expired', { status: 410 });
           key = dat.fileKey;
           // one-time consume
-          await stub.fetch('https://do/token/consume', { method: 'POST' });
-        } catch {}
+          try { await stub.fetch('https://do/token/consume', { method: 'POST' }); } catch {}
+        } catch {
+          return new Response('expired', { status: 410 });
+        }
       }
       if (!key) return new Response('missing k', { status: 400 });
       try {
