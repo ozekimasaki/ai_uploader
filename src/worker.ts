@@ -478,10 +478,12 @@ export default {
         addAny(['description','DESCRIPTION'], description);
         addAny(['prompt','PROMPT'], prompt);
         const originalName = preuploadedKey ? String(form.get('filename') || '') : (file as any).name || '';
+        const sha256Hex = String(form.get('sha256') || '').trim();
         const sizeBytes = preuploadedKey ? Number(form.get('sizeBytes') || 0) : Number((file as any).size || 0);
         addAny(['original_filename','originalFilename','ORIGINAL_FILENAME'], originalName);
         addAny(['size_bytes','sizeBytes','SIZE_BYTES'], sizeBytes);
         addAny(['file_key','fileKey','FILE_KEY'], mainKey);
+        addAny(['sha256','SHA256'], sha256Hex || null);
         addAny(['contentType','CONTENT_TYPE'], contentType);
         addAny(['extension','EXTENSION'], srcExt ? srcExt.slice(1) : '');
         addAny(['thumbnail_key','thumbnailKey','THUMBNAIL_KEY'], thumbKey || null);
@@ -548,7 +550,11 @@ export default {
         const whereParts: string[] = ["visibility = 'public'"];
         const binds: any[] = [];
         if (categoryParam) { whereParts.push('(category = ? OR CATEGORY = ? OR UPPER(category) = ?)'); binds.push(categoryParam, categoryParam, categoryParam); }
-        if (q) { whereParts.push('(title LIKE ? OR description LIKE ?)'); const like = `%${q}%`; binds.push(like, like); }
+        if (q) {
+          const like = `%${q}%`;
+          whereParts.push("(title LIKE ? OR description LIKE ? OR id IN (SELECT it.itemId FROM item_tags it JOIN tags t ON t.id = it.tagId WHERE t.label LIKE ? OR t.id LIKE ?))");
+          binds.push(like, like, like, like);
+        }
         if (tagParam) { whereParts.push(`id IN (SELECT it.itemId FROM item_tags it JOIN tags t ON t.id = it.tagId WHERE t.id = ? OR t.label = ?)`); binds.push(tagParam, tagParam); }
         let orderBy = "COALESCE(createdAt, created_at, '') DESC, rowid DESC";
         if (sort === 'popular') orderBy = "COALESCE(downloadCount, 0) DESC, COALESCE(createdAt, created_at, '') DESC, rowid DESC";
@@ -570,6 +576,7 @@ export default {
           thumbnailKey: r.thumbnail_key ?? r.thumbnailKey ?? r.THUMBNAIL_KEY ?? '',
           createdAt: r.created_at ?? r.createdAt ?? r.CREATED_AT ?? null,
           downloadCount: Number(r.downloadCount ?? r.DOWNLOADCOUNT ?? r.download_count ?? 0),
+          viewCount: Number(r.viewCount ?? r.VIEWCOUNT ?? r.view_count ?? 0),
           tags: [] as string[],
         }));
         // enrich tags if any
@@ -627,6 +634,7 @@ export default {
             contentType: row.contentType ?? row.CONTENTTYPE ?? row.CONTENT_TYPE ?? '',
             extension: row.extension ?? row.EXTENSION ?? '',
             downloadCount: Number(row.downloadCount ?? row.DOWNLOADCOUNT ?? row.download_count ?? 0),
+            viewCount: Number(row.viewCount ?? row.VIEWCOUNT ?? row.view_count ?? 0),
             createdAt: row.created_at ?? row.CREATED_AT ?? row.createdAt ?? null,
             tags: [] as string[],
           };
@@ -660,6 +668,7 @@ export default {
         const fileKeyIn = String(body?.fileKey || body?.preuploadedKey || '').trim();
         const originalName = String(body?.originalFilename || body?.filename || '').trim();
         const contentTypeIn = String(body?.contentType || '').trim() || 'application/octet-stream';
+        const sha256Hex = String(body?.sha256 || '').trim();
         const sizeBytes = Number(body?.sizeBytes || 0);
         if (!title) return new Response(JSON.stringify({ error: 'bad_request', message: 'title required' }), { status: 400, headers: { 'content-type': 'application/json' } });
         const allowedCats = ['IMAGE','VIDEO','MUSIC','VOICE','3D','OTHER'];
@@ -705,6 +714,7 @@ export default {
         addAny(['original_filename','originalFilename','ORIGINAL_FILENAME'], originalName);
         addAny(['size_bytes','sizeBytes','SIZE_BYTES'], Number.isFinite(sizeBytes) ? sizeBytes : 0);
         addAny(['file_key','fileKey','FILE_KEY'], fileKeyIn);
+        addAny(['sha256','SHA256'], sha256Hex || null);
         addAny(['contentType','CONTENT_TYPE'], contentTypeIn);
         addAny(['extension','EXTENSION'], (srcExt || '').slice(1));
         addAny(['thumbnail_key','thumbnailKey','THUMBNAIL_KEY'], String(body?.thumbnailKey || '') || null);
@@ -1254,10 +1264,14 @@ async function renderItems(env: Env, url: URL, req?: Request): Promise<Response>
   const whereParts: string[] = ["visibility = 'public'"];
   const binds: any[] = [];
   if (categoryParam) { whereParts.push('(category = ? OR CATEGORY = ? OR UPPER(category) = ?)'); binds.push(categoryParam, categoryParam, categoryParam); }
-  if (q) { whereParts.push('(title LIKE ? OR description LIKE ?)'); const like = `%${q}%`; binds.push(like, like); }
+  if (q) {
+    const like = `%${q}%`;
+    whereParts.push("(title LIKE ? OR description LIKE ? OR id IN (SELECT it.itemId FROM item_tags it JOIN tags t ON t.id = it.tagId WHERE t.label LIKE ? OR t.id LIKE ?))");
+    binds.push(like, like, like, like);
+  }
   if (tagParam) { whereParts.push(`id IN (SELECT it.itemId FROM item_tags it JOIN tags t ON t.id = it.tagId WHERE t.id = ? OR t.label = ?)`); binds.push(tagParam, tagParam); }
   let orderBy = "COALESCE(createdAt, created_at, '') DESC, rowid DESC";
-  if (sort === 'popular') orderBy = "COALESCE(downloadCount, 0) DESC, COALESCE(createdAt, created_at, '') DESC, rowid DESC";
+  if (sort === 'popular') orderBy = "COALESCE(downloadCount, 0) DESC, COALESCE(viewCount, 0) DESC, COALESCE(createdAt, created_at, '') DESC, rowid DESC";
   try {
     const limit = pageSize + 1;
     const offset = (page - 1) * pageSize;
@@ -1278,6 +1292,7 @@ async function renderItems(env: Env, url: URL, req?: Request): Promise<Response>
       thumbnailKey: r.thumbnail_key ?? r.thumbnailKey ?? r.THUMBNAIL_KEY ?? '',
       createdAt: r.created_at ?? r.createdAt ?? r.CREATED_AT ?? null,
       downloadCount: Number(r.downloadCount ?? r.DOWNLOADCOUNT ?? r.download_count ?? 0),
+      viewCount: Number(r.viewCount ?? r.VIEWCOUNT ?? r.view_count ?? 0),
       tags: (() => {
         const tj = r.tags_json ?? r.TAGS_JSON ?? null;
         if (tj) {
@@ -1327,6 +1342,7 @@ async function renderItems(env: Env, url: URL, req?: Request): Promise<Response>
       </div>
       <div class="text-gray-500 text-xs mt-1.5">${escapeHtml(it.category)}</div>
       <div class="text-gray-500 text-xs mt-1.5">DL: ${Number(it.downloadCount||0)}</div>
+      <div class="text-gray-500 text-xs mt-1.5">閲覧: ${Number(it.viewCount||0)}</div>
       ${it.tags && it.tags.length ? `<div class=\"mt-1.5 flex flex-wrap gap-1\">${it.tags.map((tg: any) => `<span class=\"text-xs px-2 py-0.5 rounded-full border border-gray-200\">#${escapeHtml(String(tg))}</span>`).join('')}</div>` : ''}
     </div>
   `).join('');
@@ -1420,6 +1436,7 @@ async function renderItem(env: Env, id: string, req?: Request): Promise<Response
     contentType: row.contentType ?? row.CONTENTTYPE ?? row.CONTENT_TYPE ?? '',
     extension: row.extension ?? row.EXTENSION ?? '',
     downloadCount: Number(row.downloadCount ?? row.DOWNLOADCOUNT ?? row.download_count ?? 0),
+    viewCount: Number(row.viewCount ?? row.VIEWCOUNT ?? row.view_count ?? 0),
     createdAt: row.created_at ?? row.CREATED_AT ?? row.createdAt ?? null,
   };
 
@@ -1445,6 +1462,7 @@ async function renderItem(env: Env, id: string, req?: Request): Promise<Response
       <div class="text-gray-500 text-xs">作成日</div><div>${formatDate(it.createdAt)}</div>
       <div class="text-gray-500 text-xs">ファイル名</div><div>${escapeHtml(it.originalFilename || '')}</div>
       <div class="text-gray-500 text-xs">ダウンロード</div><div>${Number(it.downloadCount||0)}</div>
+      <div class="text-gray-500 text-xs">閲覧</div><div>${Number(it.viewCount||0)}</div>
     </div>
   </div>`;
   // 所有者向け: 公開/非公開トグル
@@ -1875,6 +1893,7 @@ async function renderUpload(env: Env, req?: Request): Promise<Response> {
       try {
         showTip(); setProgress(0); status.textContent='準備中...';
         let key = '';
+        let digestHex = '';
         if (useMultipart) {
           status.textContent = '初期化中...';
           const init = await fetch('/api/upload/multipart/init', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ filename: file.name, contentType: file.type||'application/octet-stream' }) });
@@ -1896,6 +1915,12 @@ async function renderUpload(env: Env, req?: Request): Promise<Response> {
           await fetch('/api/upload/multipart/complete', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ key, uploadId, parts: etags }) });
           setProgress(85);
         }
+        // 小容量時はクライアントでsha256計算（大容量は省略）
+        if (!useMultipart && file.size <= 64*1024*1024) {
+          status.textContent = 'ハッシュ計算中...';
+          const buf = await file.arrayBuffer();
+          digestHex = await sha256(buf);
+        }
         status.textContent = '登録中...';
         const fd = new FormData(form);
         if (key) {
@@ -1905,6 +1930,7 @@ async function renderUpload(env: Env, req?: Request): Promise<Response> {
           fd.set('contentType', file.type||'application/octet-stream');
           fd.delete('file');
         }
+        if (digestHex) { fd.set('sha256', digestHex); }
         const acceptJson = { headers: { 'accept':'application/json' }, method:'POST', body: fd };
         const resp = await fetch('/api/upload', acceptJson);
         const data = await resp.json().catch(()=>({}));
@@ -2049,7 +2075,9 @@ async function ensureTables(env: Env): Promise<void> {
       { name: 'size_bytes', type: 'INTEGER' },
       { name: 'contentType', type: 'TEXT' },
       { name: 'extension', type: 'TEXT' },
+      { name: 'sha256', type: 'TEXT' },
       { name: 'downloadCount', type: 'INTEGER' },
+      { name: 'viewCount', type: 'INTEGER' },
       { name: 'file_key', type: 'TEXT' },
       { name: 'thumbnail_key', type: 'TEXT' },
       { name: 'published_at', type: 'TEXT' },
@@ -2074,6 +2102,10 @@ async function ensureTables(env: Env): Promise<void> {
     // items (downloadCount) — 列が存在する場合のみ
     if (has('downloadCount')) {
       try { await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_items_downloadCount ON items (downloadCount DESC)`).run(); } catch {}
+    }
+    // items (viewCount) — 列が存在する場合のみ
+    if (has('viewCount')) {
+      try { await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_items_viewCount ON items (viewCount DESC)`).run(); } catch {}
     }
   } catch {}
 

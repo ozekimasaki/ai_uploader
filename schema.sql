@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS items (
   size_bytes INTEGER,
   contentType TEXT,
   extension TEXT,
+  sha256 TEXT,
   file_key TEXT NOT NULL,
   thumbnail_key TEXT,
   published_at TEXT,
@@ -49,6 +50,7 @@ CREATE TABLE IF NOT EXISTS item_tags (
 
 CREATE INDEX IF NOT EXISTS idx_items_visibility_publishedAt ON items (visibility, published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_items_downloadCount ON items (downloadCount DESC);
+CREATE INDEX IF NOT EXISTS idx_items_viewCount ON items (viewCount DESC);
 CREATE INDEX IF NOT EXISTS idx_items_category_publishedAt ON items (category, published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_item_tags_tag_item ON item_tags (tagId, itemId);
 
