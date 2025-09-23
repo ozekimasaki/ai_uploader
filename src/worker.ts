@@ -1054,9 +1054,22 @@ export default {
         headers.set('content-disposition', `${dispo}; filename="${filename}"`);
         // 人気順のためにダウンロード開始でカウント（download パラメータが付与された場合のみ）
         if (dl) {
+          // カウント前にテーブル/列を確実に準備
+          try { await ensureTables(env); } catch {}
           try {
-            const r: any = await env.DB.prepare(`SELECT id FROM items WHERE fileKey = ? OR file_key = ? LIMIT 1`).bind(key, key).first();
-            const itemId = r?.id ?? r?.ID ?? null;
+            let itemId: any = null;
+            // まず file_key で検索（標準列）
+            try {
+              const r1: any = await env.DB.prepare(`SELECT id FROM items WHERE file_key = ? LIMIT 1`).bind(key).first();
+              itemId = r1?.id ?? r1?.ID ?? null;
+            } catch {}
+            // 見つからない/エラー時は旧スキーマ fileKey を試す
+            if (!itemId) {
+              try {
+                const r2: any = await env.DB.prepare(`SELECT id FROM items WHERE fileKey = ? LIMIT 1`).bind(key).first();
+                itemId = r2?.id ?? r2?.ID ?? null;
+              } catch {}
+            }
             if (itemId) {
               // 重複防止: 同一IP×同一アイテムで一定時間内の重複カウントを抑止
               const ip = req.headers.get('cf-connecting-ip') || '0.0.0.0';
@@ -1071,7 +1084,7 @@ export default {
                 }
               } catch {
                 // DO失敗時はフォールバックでカウント（ユーザー体験を優先）
-                await env.DB.prepare(`UPDATE items SET downloadCount = COALESCE(downloadCount, 0) + 1 WHERE id = ?`).bind(itemId).run();
+                try { await env.DB.prepare(`UPDATE items SET downloadCount = COALESCE(downloadCount, 0) + 1 WHERE id = ?`).bind(itemId).run(); } catch {}
               }
             }
           } catch {}
