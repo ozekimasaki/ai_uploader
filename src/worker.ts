@@ -10,6 +10,7 @@ export interface Env {
   ALLOWED_FILE_TYPES: string;
   SUPABASE_URL: string;
   SUPABASE_ANON_KEY: string;
+  DISCORD_WEBHOOK_URL?: string;
   R2_BUCKET: string;
   R2: R2Bucket;
   DB: D1Database;
@@ -155,6 +156,20 @@ function normalizeUsernameFromId(uid: string): string {
   return s.slice(0, 10).padEnd(3, '0');
 }
 
+async function enforceRateLimitByDo(name: string, windowSec: number, limit: number, env: Env): Promise<{ allowed: boolean; resetAt: number }>{
+  try {
+    const id = env.RATE_LIMITER_DO.idFromName(name);
+    const stub = env.RATE_LIMITER_DO.get(id);
+    const resp = await stub.fetch(`https://do/limit?window=${windowSec}&limit=${limit}`, { method: 'POST' });
+    const j: any = await resp.json().catch(()=>({ allowed: true }));
+    const allowed = j?.allowed !== false;
+    const resetAt = Number(j?.resetAt || 0);
+    return { allowed, resetAt };
+  } catch {
+    return { allowed: true, resetAt: 0 };
+  }
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
@@ -270,6 +285,17 @@ export default {
     // multipart upload endpoints for large files
     if (url.pathname === '/api/upload/multipart/init' && req.method === 'POST') {
       try {
+        // rate limit: per user per hour
+        const authed = await getAuthUser(req, env).catch(()=>null);
+        const uid = String((authed as any)?.id || '');
+        if (!uid) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'content-type': 'application/json' } });
+        const perHour = Math.max(1, Number(env.RATE_LIMIT_UPLOAD_PER_HOUR || 50));
+        const r = await enforceRateLimitByDo(`upl:${uid}`, 3600, perHour, env);
+        if (!r.allowed) {
+          const h = new Headers({ 'content-type':'application/json' });
+          if (r.resetAt) h.set('retry-after', String(Math.max(1, Math.ceil((r.resetAt - Date.now())/1000))));
+          return new Response(JSON.stringify({ error: 'rate_limited', scope: 'upload_per_user_per_hour', resetAt: r.resetAt }), { status: 429, headers: h });
+        }
         const body: any = await req.json().catch(() => ({} as any));
         const filename = String(body?.filename || '').trim();
         const contentType = String(body?.contentType || 'application/octet-stream');
@@ -336,8 +362,18 @@ export default {
       // 診断情報（失敗時に詳細を表示）
       const diag: any = { id: '', mainKey: '', thumbKey: '', insertCols: [] as string[], insertValsPreview: [] as string[], tags: [] as string[] };
       try {
+        // rate limit: per user per hour
+        const authed = await getAuthUser(req, env).catch(()=>null);
+        const uidForLimit = String((authed as any)?.id || '');
+        if (!uidForLimit) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'content-type': 'application/json' } });
+        const perHour = Math.max(1, Number(env.RATE_LIMIT_UPLOAD_PER_HOUR || 50));
+        const r = await enforceRateLimitByDo(`upl:${uidForLimit}`, 3600, perHour, env);
+        if (!r.allowed) {
+          const h = new Headers({ 'content-type':'application/json' });
+          if (r.resetAt) h.set('retry-after', String(Math.max(1, Math.ceil((r.resetAt - Date.now())/1000))));
+          return new Response(JSON.stringify({ error: 'rate_limited', scope: 'upload_per_user_per_hour', resetAt: r.resetAt }), { status: 429, headers: h });
+        }
         await ensureTables(env);
-        const authed = await getAuthUser(req, env);
         if (!authed) {
           if ((req.headers.get('accept') || '').includes('application/json')) {
             return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'content-type': 'application/json' } });
@@ -663,6 +699,61 @@ export default {
       }
     }
 
+    // Create report (logged-in; item may be public or private if owner)
+    {
+      if (url.pathname === '/api/reports' && req.method === 'POST') {
+        const authed = await getAuthUser(req, env);
+        if (!authed) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'content-type': 'application/json' } });
+        const uid = String((authed as any)?.id || '');
+        try {
+          await ensureTables(env);
+          const body: any = await req.json().catch(()=>({}));
+          const itemId = String(body?.itemId || '').trim();
+          const reason = String(body?.reason || '').trim().slice(0, 1000);
+          if (!itemId) return new Response(JSON.stringify({ error: 'bad_request' }), { status: 400, headers: { 'content-type': 'application/json' } });
+          // basic existence check (avoid referencing non-existent columns)
+          const row: any = await env.DB.prepare(`SELECT * FROM items WHERE id = ? LIMIT 1`).bind(itemId).first();
+          if (!row) return new Response(JSON.stringify({ error: 'not_found' }), { status: 404, headers: { 'content-type': 'application/json' } });
+          // create report
+          const id = crypto.randomUUID();
+          const nowIso = new Date().toISOString();
+          await env.DB.prepare(`INSERT INTO reports (id, itemId, reporterUserId, reason, createdAt, status) VALUES (?, ?, ?, ?, ?, 'open')`)
+            .bind(id, itemId, uid, reason, nowIso).run();
+          // Discord webhook notify (best-effort)
+          let notified = false; let notifyStatus = 0;
+          const hook = (env.DISCORD_WEBHOOK_URL || '').trim();
+          if (hook) {
+            const origin = new URL(req.url).origin;
+            const itemUrl = `${origin}/items/${encodeURIComponent(itemId)}`;
+            const payload = {
+              username: 'AI Uploader',
+              content: '🚨 新しい通報',
+              embeds: [
+                {
+                  title: 'Report',
+                  description: (reason || '(なし)').slice(0, 1000),
+                  color: 0xFFAA00,
+                  fields: [
+                    { name: 'Item', value: `[${itemId}](${itemUrl})`, inline: false },
+                    { name: 'Reporter', value: uid, inline: true },
+                    { name: 'Time', value: nowIso, inline: true }
+                  ]
+                }
+              ]
+            };
+            try {
+              const resp = await fetch(hook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+              notifyStatus = resp.status;
+              notified = resp.ok || resp.status === 204;
+            } catch {}
+          }
+          return new Response(JSON.stringify({ ok: true, id, notified, notifyStatus }), { headers: { 'content-type': 'application/json' } });
+        } catch (e: any) {
+          return new Response(JSON.stringify({ error: 'internal', message: String(e?.message || e) }), { status: 500, headers: { 'content-type': 'application/json' } });
+        }
+      }
+    }
+
     // --- DEBUG endpoints (development only) ---
     if (url.pathname.startsWith('/api/debug/')) {
       if (String(env.ENVIRONMENT || '').toLowerCase() !== 'development') {
@@ -787,93 +878,7 @@ export default {
       }
     }
 
-    // Inspect specific item (owner only) for debugging
-    if (url.pathname === '/api/debug/item' && req.method === 'GET') {
-      try {
-        const authed = await getAuthUser(req, env);
-        if (!authed) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'content-type': 'application/json' } });
-        const viewerId = String((authed as any)?.id || '');
-        const itemId = String(url.searchParams.get('id') || '');
-        if (!itemId) return new Response(JSON.stringify({ error: 'bad_request' }), { status: 400, headers: { 'content-type': 'application/json' } });
-        await ensureTables(env);
-        const row: any = await env.DB.prepare(`SELECT * FROM items WHERE id = ? LIMIT 1`).bind(itemId).first();
-        if (!row) return new Response(JSON.stringify({ error: 'not_found' }), { status: 404, headers: { 'content-type': 'application/json' } });
-        const owner = row.ownerUserId ?? row.OWNERUSERID ?? row.owner_user_id ?? row.OWNER_USER_ID ?? '';
-        const ok = owner && owner === viewerId;
-        if (!ok) return new Response(JSON.stringify({ error: 'forbidden', owner, viewerId }), { status: 403, headers: { 'content-type': 'application/json' } });
-        const info: any = await env.DB.prepare(`PRAGMA table_info(items)`).all();
-        const cols: any[] = info?.results ?? info ?? [];
-        return new Response(JSON.stringify({ row, columns: cols.map((r: any)=>r.name ?? r.NAME), owner, viewerId }), { headers: { 'content-type': 'application/json' } });
-      } catch (e: any) {
-        return new Response(JSON.stringify({ error: 'internal', message: String(e?.message || e) }), { status: 500, headers: { 'content-type': 'application/json' } });
-      }
-    }
-
-    // Debug: get users by username and viewer
-    if (url.pathname === '/api/debug/user' && req.method === 'GET') {
-      try {
-        const authed = await getAuthUser(req, env);
-        if (!authed) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'content-type': 'application/json' } });
-        const viewerId = String((authed as any)?.id || '');
-        const u = String(url.searchParams.get('u') || '').trim();
-        await ensureTables(env);
-        const usersRes: any = await env.DB.prepare(`SELECT * FROM users WHERE username = ? LIMIT 5`).bind(u).all();
-        const users: any[] = usersRes?.results ?? usersRes ?? [];
-        const viewerRow: any = await env.DB.prepare(`SELECT * FROM users WHERE id = ? LIMIT 1`).bind(viewerId).first();
-        return new Response(JSON.stringify({ viewerId, normViewer: normalizeUsernameFromId(viewerId), param: u, users, viewerRow }), { headers: { 'content-type': 'application/json' } });
-      } catch (e: any) {
-        return new Response(JSON.stringify({ error: 'internal', message: String(e?.message || e) }), { status: 500, headers: { 'content-type': 'application/json' } });
-      }
-    }
-
-    // Debug: items list as used by user page logic
-    if (url.pathname === '/api/debug/user-items' && req.method === 'GET') {
-      try {
-        const authed = await getAuthUser(req, env);
-        if (!authed) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'content-type': 'application/json' } });
-        const viewerId = String((authed as any)?.id || '');
-        const u = String(url.searchParams.get('u') || '').trim();
-        await ensureTables(env);
-        const normViewer = viewerId ? normalizeUsernameFromId(viewerId) : '';
-        let targetUser: any = null;
-        if (viewerId && normViewer && normViewer === u) {
-          targetUser = await env.DB.prepare(`SELECT * FROM users WHERE id = ? LIMIT 1`).bind(viewerId).first();
-          if (!targetUser) {
-            await env.DB.prepare(`INSERT OR IGNORE INTO users (id, username, displayName) VALUES (?, ?, ?)`)
-              .bind(viewerId, normViewer, '').run();
-            targetUser = await env.DB.prepare(`SELECT * FROM users WHERE id = ? LIMIT 1`).bind(viewerId).first();
-          }
-        } else {
-          targetUser = await env.DB.prepare(`SELECT * FROM users WHERE username = ? LIMIT 1`).bind(u).first();
-        }
-        const uid = targetUser?.id ?? targetUser?.ID ?? '';
-        const isOwnerView = viewerId && uid && viewerId === uid;
-        const whereVis = isOwnerView ? '1=1' : "(visibility = 'public' OR VISIBILITY = 'public')";
-
-        const info: any = await env.DB.prepare(`PRAGMA table_info(items)`).all();
-        const rows: any[] = info?.results ?? info ?? [];
-        const names = new Set<string>(rows.map((r: any) => String(r.name ?? r.NAME ?? '').toLowerCase()));
-        const ownerConds: string[] = [];
-        const binds: any[] = [];
-        if (names.has('owneruserid')) { ownerConds.push('ownerUserId = ?'); binds.push(uid); }
-        if (names.has('owner_user_id')) { ownerConds.push('owner_user_id = ?'); binds.push(uid); }
-        if (!ownerConds.length) { ownerConds.push('ownerUserId = ?'); binds.push(uid); }
-
-        const sql = `SELECT *, COALESCE(createdAt, created_at, updatedAt, updated_at, '') as created_order
-                     FROM items
-                     WHERE (${ownerConds.join(' OR ')}) AND ${whereVis}
-                     ORDER BY created_order DESC, rowid DESC LIMIT 100`;
-        const res: any = await env.DB.prepare(sql).bind(...binds).all();
-        const items: any[] = res?.results ?? res ?? [];
-        return new Response(JSON.stringify({
-          viewerId, username: u, normViewer, targetUser: { id: uid }, isOwnerView,
-          ownerConds, bindsCount: binds.length, count: items.length,
-          sample: items.slice(0, 5).map((r: any)=>({ id: r.id ?? r.ID, title: r.title ?? r.TITLE, visibility: r.visibility ?? r.VISIBILITY }))
-        }), { headers: { 'content-type': 'application/json' } });
-      } catch (e: any) {
-        return new Response(JSON.stringify({ error: 'internal', message: String(e?.message || e) }), { status: 500, headers: { 'content-type': 'application/json' } });
-      }
-    }
+    // Debug endpoints removed
 
     if (url.pathname === '/api/thumbnail' && req.method === 'GET') {
       // protect thumbnail behind login (要ログイン仕様)
@@ -1233,6 +1238,7 @@ async function renderItem(env: Env, id: string, req?: Request): Promise<Response
     <button id="btnDl" class="inline-block px-3 py-1.5 border border-black rounded-md text-black hover:bg-black/5">ダウンロード</button>
     ${ownerControls}
     ${ownerControls ? '<button id="btnDelete" class="inline-block px-3 py-1.5 border border-red-600 text-red-700 rounded-md hover:bg-red-50">削除</button>' : ''}
+    <button id="btnReport" class="inline-block px-3 py-1.5 border border-amber-600 text-amber-700 rounded-md hover:bg-amber-50">通報</button>
   </div>`;
 
   const desc = it.description ? `<div class="mt-4"><div class=\"text-gray-500 text-xs mb-1\">説明</div><p class="whitespace-pre-wrap">${escapeHtml(it.description)}</p></div>` : '';
@@ -1332,6 +1338,16 @@ async function renderItem(env: Env, id: string, req?: Request): Promise<Response
         alert('削除に失敗しました');
       }catch{ btnDelete?.removeAttribute('disabled'); }
     });
+    const btnReport = document.getElementById('btnReport');
+    btnReport?.addEventListener('click', async()=>{
+      try{
+        const reason = prompt('通報理由を入力してください（任意）') || '';
+        const res = await fetch('/api/reports', { method:'POST', headers:{'content-type':'application/json','accept':'application/json'}, body: JSON.stringify({ itemId: '${escapeHtml(String(it.id))}', reason }) });
+        if (res.ok) { alert('通報を受け付けました。ありがとうございます。'); return; }
+        if (res.status === 401) { location.href='/?login=1'; return; }
+        alert('通報に失敗しました');
+      }catch{}
+    });
   })();
   </script>
   `;
@@ -1382,12 +1398,22 @@ async function renderUser(env: Env, username: string, req?: Request): Promise<Re
   try {
     const isOwnerView = viewerId && viewerId === uid;
     const whereVis = isOwnerView ? '1=1' : "(visibility = 'public' OR VISIBILITY = 'public')";
-    // createdAt/created_at混在環境で新しい方を優先的に並べ替え
+    // 実在する所有者カラムを検出して条件を構築
+    const ownerConds: string[] = [];
+    const binds: any[] = [];
+    try {
+      const info: any = await env.DB.prepare(`PRAGMA table_info(items)`).all();
+      const rowsInfo: any[] = info?.results ?? info ?? [];
+      const names = new Set<string>(rowsInfo.map((r: any) => String(r.name ?? r.NAME ?? '').toLowerCase()));
+      if (names.has('owneruserid')) { ownerConds.push('ownerUserId = ?'); binds.push(uid); }
+      if (names.has('owner_user_id')) { ownerConds.push('owner_user_id = ?'); binds.push(uid); }
+    } catch {}
+    if (!ownerConds.length) { ownerConds.push('ownerUserId = ?'); binds.push(uid); }
     const sql = `SELECT *, COALESCE(createdAt, created_at, updatedAt, updated_at, '') as created_order
                  FROM items
-                 WHERE (ownerUserId = ? OR owner_user_id = ? OR OWNER_USER_ID = ? OR OWNERUSERID = ?) AND ${whereVis}
+                 WHERE (${ownerConds.join(' OR ')}) AND ${whereVis}
                  ORDER BY created_order DESC, rowid DESC LIMIT 100`;
-    const res: any = await env.DB.prepare(sql).bind(uid, uid, uid, uid).all();
+    const res: any = await env.DB.prepare(sql).bind(...binds).all();
     const rows: any[] = res?.results ?? res ?? [];
     items = rows.map((r: any) => ({
       id: r.id ?? r.ID,
@@ -1707,6 +1733,17 @@ async function ensureTables(env: Env): Promise<void> {
       itemId TEXT NOT NULL,
       tagId TEXT NOT NULL,
       UNIQUE(itemId, tagId)
+    )`).run();
+
+  // reports
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS reports (
+      id TEXT PRIMARY KEY,
+      itemId TEXT NOT NULL,
+      reporterUserId TEXT NOT NULL,
+      reason TEXT,
+      createdAt TEXT NOT NULL,
+      status TEXT NOT NULL
     )`).run();
 
   // migrate existing 'items' to ensure required columns exist
