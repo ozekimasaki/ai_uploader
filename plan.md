@@ -245,8 +245,9 @@ wrangler secret list
 - フロントエンド: `vite build` で `dist` を生成（静的アセット）
 - デプロイコマンド: `wrangler deploy`
 - 設定ファイル: `wrangler.jsonc`（Cloudflare バインディング設定）
-- ローカル開発: `vite dev`（SPA）と `wrangler dev`（API）を併用
+- ローカル開発: `npm run dev:web`（フロント） と `npm run dev:api`（API）を併用
 - 環境変数管理: Wrangler 経由で環境変数設定
+- プレビュー: `npm run preview:web`（ビルド後の静的アセットをローカルで確認）
 - CI/CD: GitHub Actions でビルド・デプロイ自動化
 
 ### Workers + 静的アセット設定（要点）

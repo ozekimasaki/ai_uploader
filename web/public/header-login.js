@@ -27,7 +27,7 @@
       }
     }catch(e){}
     const btn = document.getElementById('btnHeaderLogin');
-    if (btn) btn.addEventListener('click', startLogin);
+    if (btn) btn.addEventListener('click', startLogin, { once: true });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
   else bind();

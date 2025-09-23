@@ -19,10 +19,11 @@ export interface Env {
 }
 
 const html = (s: string, status = 200) => new Response(s, { status, headers: { 'content-type': 'text/html; charset=utf-8' } });
-function renderHeaderHtml(isLoggedIn: boolean): string {
+function renderHeaderHtml(isLoggedIn: boolean, username?: string): string {
   if (isLoggedIn) {
+    const my = username ? `\n            <a href="/u/${escapeHtml(username)}" class="text-blue-600">マイページ</a>` : '';
     return `<a href="/items" class="text-blue-600">一覧</a>
-            <a href="/upload" class="text-blue-600">アップロード</a>
+            <a href="/upload" class="text-blue-600">アップロード</a>${my}
             <a href="/logout" class="text-gray-600">ログアウト</a>`;
   }
   return `<button id="btnHeaderLogin" class="text-blue-600">ログイン</button>`;
@@ -34,8 +35,9 @@ function renderLoginRequiredHtml(): string {
   return `<h1 class="text-lg font-semibold">ログインが必要です</h1>
   <p class="text-gray-500 text-sm mt-1">右上の「ログイン」から認証してください。</p>`;
 }
-function layout(title: string, body: string, opts?: { isLoggedIn?: boolean; auth?: { supaUrl: string; anonKey: string } }): string {
+function layout(title: string, body: string, opts?: { isLoggedIn?: boolean; username?: string; auth?: { supaUrl: string; anonKey: string } }): string {
   const isLoggedIn = !!opts?.isLoggedIn;
+  const username = opts?.username || '';
   return `<!doctype html><html lang="ja"><head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -47,7 +49,7 @@ function layout(title: string, body: string, opts?: { isLoggedIn?: boolean; auth
     <header class="border-b border-gray-200 h-14 flex items-center">
       <div class="max-w-[980px] mx-auto px-4 w-full flex justify-between">
         <a href="/" class="font-semibold text-gray-900">AI Uploader</a>
-        <nav class="flex gap-3" data-shared-header>${renderHeaderHtml(isLoggedIn)}</nav>
+        <nav class="flex gap-3" data-shared-header>${renderHeaderHtml(isLoggedIn, username)}</nav>
       </div>
     </header>
     <main class="max-w-[980px] mx-auto px-4 py-4">${body}</main>
@@ -528,6 +530,215 @@ export default {
       }
     }
 
+    // JSON items API (list, detail, create)
+    // List items (login required; public items only)
+    if (url.pathname === '/api/items' && req.method === 'GET') {
+      const authed = await getAuthUser(req, env);
+      if (!authed) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'content-type': 'application/json' } });
+      try {
+        await ensureTables(env);
+      } catch {}
+      try {
+        const page = Math.max(1, Number(url.searchParams.get('page') || '1'));
+        const pageSize = 20;
+        const q = String(url.searchParams.get('q') || '').trim();
+        const categoryParam = String(url.searchParams.get('category') || '').trim().toUpperCase();
+        const tagParam = String(url.searchParams.get('tag') || '').trim();
+        const sort = String(url.searchParams.get('sort') || 'new').trim();
+        const whereParts: string[] = ["visibility = 'public'"];
+        const binds: any[] = [];
+        if (categoryParam) { whereParts.push('(category = ? OR CATEGORY = ? OR UPPER(category) = ?)'); binds.push(categoryParam, categoryParam, categoryParam); }
+        if (q) { whereParts.push('(title LIKE ? OR description LIKE ?)'); const like = `%${q}%`; binds.push(like, like); }
+        if (tagParam) { whereParts.push(`id IN (SELECT it.itemId FROM item_tags it JOIN tags t ON t.id = it.tagId WHERE t.id = ? OR t.label = ?)`); binds.push(tagParam, tagParam); }
+        let orderBy = "COALESCE(createdAt, created_at, '') DESC, rowid DESC";
+        if (sort === 'popular') orderBy = "COALESCE(downloadCount, 0) DESC, COALESCE(createdAt, created_at, '') DESC, rowid DESC";
+        const limit = pageSize + 1;
+        const offset = (page - 1) * pageSize;
+        const sql = `SELECT * FROM items WHERE ${whereParts.join(' AND ')} ORDER BY ${orderBy} LIMIT ? OFFSET ?`;
+        const res: any = await env.DB.prepare(sql).bind(...binds, limit, offset).all();
+        const rows: any[] = res?.results ?? res ?? [];
+        const hasNext = rows.length > pageSize;
+        let items = rows.slice(0, pageSize).map((r: any) => ({
+          id: r.id ?? r.ID,
+          ownerUserId: r.ownerUserId ?? r.OWNERUSERID ?? r.owner_user_id ?? r.OWNER_USER_ID ?? '',
+          title: r.title ?? r.TITLE ?? 'Untitled',
+          category: r.category ?? r.CATEGORY ?? 'OTHER',
+          visibility: r.visibility ?? r.VISIBILITY ?? 'public',
+          originalFilename: r.original_filename ?? r.originalFilename ?? r.ORIGINAL_FILENAME ?? '',
+          sizeBytes: Number(r.size_bytes ?? r.sizeBytes ?? r.SIZE_BYTES ?? 0),
+          fileKey: r.file_key ?? r.fileKey ?? r.FILE_KEY ?? '',
+          thumbnailKey: r.thumbnail_key ?? r.thumbnailKey ?? r.THUMBNAIL_KEY ?? '',
+          createdAt: r.created_at ?? r.createdAt ?? r.CREATED_AT ?? null,
+          downloadCount: Number(r.downloadCount ?? r.DOWNLOADCOUNT ?? r.download_count ?? 0),
+          tags: [] as string[],
+        }));
+        // enrich tags if any
+        try {
+          const ids = items.map((it: any) => it.id).filter(Boolean);
+          if (ids.length) {
+            const placeholders = ids.map(() => '?').join(',');
+            const sql2 = `SELECT it.itemId as id, GROUP_CONCAT(t.label, ',') as labels\n                   FROM item_tags it\n                   JOIN tags t ON t.id = it.tagId\n                   WHERE it.itemId IN (${placeholders})\n                   GROUP BY it.itemId`;
+            const res2: any = await env.DB.prepare(sql2).bind(...ids).all();
+            const rows2: any[] = res2?.results ?? res2 ?? [];
+            const idToTags: Record<string, string[]> = {};
+            for (const r2 of rows2) {
+              const rid = r2.id ?? r2.ID ?? r2.itemId ?? r2.ITEMID;
+              const s = r2.labels ?? r2.LABELS ?? '';
+              idToTags[String(rid)] = s ? String(s).split(',').map((x: string) => x.trim()).filter(Boolean) : [];
+            }
+            items = items.map((it: any) => ({ ...it, tags: idToTags[String(it.id)] ?? [] }));
+          }
+        } catch {}
+        return new Response(JSON.stringify({ page, hasNext, items }), { headers: { 'content-type': 'application/json' } });
+      } catch (e: any) {
+        return new Response(JSON.stringify({ error: 'internal', message: String(e?.message || e) }), { status: 500, headers: { 'content-type': 'application/json' } });
+      }
+    }
+
+    // Get item detail (login required)
+    {
+      const m = /^\/api\/items\/([A-Za-z0-9_-]+)$/.exec(url.pathname);
+      if (m && req.method === 'GET') {
+        const authed = await getAuthUser(req, env);
+        if (!authed) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'content-type': 'application/json' } });
+        try { await ensureTables(env); } catch {}
+        const id = m[1];
+        try {
+          const row: any = await env.DB.prepare(`SELECT * FROM items WHERE id = ? LIMIT 1`).bind(id).first();
+          if (!row) return new Response(JSON.stringify({ error: 'not_found' }), { status: 404, headers: { 'content-type': 'application/json' } });
+          const visibilityRaw = String(row.visibility ?? row.VISIBILITY ?? 'public').toLowerCase();
+          const ownerId = row.ownerUserId ?? row.OWNERUSERID ?? row.owner_user_id ?? row.OWNER_USER_ID ?? '';
+          const viewerId = String((authed as any)?.id || '');
+          if (visibilityRaw === 'private' && (!viewerId || viewerId !== ownerId)) {
+            return new Response(JSON.stringify({ error: 'not_found' }), { status: 404, headers: { 'content-type': 'application/json' } });
+          }
+          const it: any = {
+            id: row.id ?? row.ID,
+            ownerUserId: ownerId,
+            title: row.title ?? row.TITLE ?? 'Untitled',
+            description: row.description ?? row.DESCRIPTION ?? '',
+            prompt: row.prompt ?? row.PROMPT ?? '',
+            category: row.category ?? row.CATEGORY ?? 'OTHER',
+            visibility: row.visibility ?? row.VISIBILITY ?? 'public',
+            originalFilename: row.original_filename ?? row.originalFilename ?? row.ORIGINAL_FILENAME ?? '',
+            sizeBytes: Number(row.size_bytes ?? row.sizeBytes ?? row.SIZE_BYTES ?? 0),
+            fileKey: row.file_key ?? row.fileKey ?? row.FILE_KEY ?? '',
+            thumbnailKey: row.thumbnail_key ?? row.thumbnailKey ?? row.THUMBNAIL_KEY ?? '',
+            contentType: row.contentType ?? row.CONTENTTYPE ?? row.CONTENT_TYPE ?? '',
+            extension: row.extension ?? row.EXTENSION ?? '',
+            downloadCount: Number(row.downloadCount ?? row.DOWNLOADCOUNT ?? row.download_count ?? 0),
+            createdAt: row.created_at ?? row.CREATED_AT ?? row.createdAt ?? null,
+            tags: [] as string[],
+          };
+          try {
+            const resT: any = await env.DB.prepare(
+              `SELECT GROUP_CONCAT(t.label, ',') as labels FROM item_tags it JOIN tags t ON t.id = it.tagId WHERE it.itemId = ?`
+            ).bind(it.id).first();
+            const labels = resT?.labels ?? resT?.LABELS ?? '';
+            it.tags = labels ? String(labels).split(',').map((s: string)=>s.trim()).filter(Boolean) : [];
+          } catch {}
+          return new Response(JSON.stringify({ item: it }), { headers: { 'content-type': 'application/json' } });
+        } catch (e: any) {
+          return new Response(JSON.stringify({ error: 'internal', message: String(e?.message || e) }), { status: 500, headers: { 'content-type': 'application/json' } });
+        }
+      }
+    }
+
+    // Create item metadata via JSON (login required)
+    if (url.pathname === '/api/items' && req.method === 'POST') {
+      const authed = await getAuthUser(req, env);
+      if (!authed) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: { 'content-type': 'application/json' } });
+      try { await ensureTables(env); } catch {}
+      try {
+        const body: any = await req.json().catch(()=>({}));
+        const title = String(body?.title || '').trim();
+        const category = String(body?.category || '').trim().toUpperCase();
+        const visibility = (String(body?.visibility || 'private').trim().toLowerCase() === 'public') ? 'public' : 'private';
+        const description = String(body?.description || '').trim();
+        const prompt = String(body?.prompt || '').trim();
+        const tagsInputRaw = Array.isArray(body?.tags) ? String((body?.tags||[]).join(',')) : String(body?.tags || '');
+        const fileKeyIn = String(body?.fileKey || body?.preuploadedKey || '').trim();
+        const originalName = String(body?.originalFilename || body?.filename || '').trim();
+        const contentTypeIn = String(body?.contentType || '').trim() || 'application/octet-stream';
+        const sizeBytes = Number(body?.sizeBytes || 0);
+        if (!title) return new Response(JSON.stringify({ error: 'bad_request', message: 'title required' }), { status: 400, headers: { 'content-type': 'application/json' } });
+        const allowedCats = ['IMAGE','VIDEO','MUSIC','VOICE','3D','OTHER'];
+        if (!allowedCats.includes(category)) return new Response(JSON.stringify({ error: 'bad_request', message: 'invalid category' }), { status: 400, headers: { 'content-type': 'application/json' } });
+        if (!fileKeyIn) return new Response(JSON.stringify({ error: 'bad_request', message: 'fileKey required' }), { status: 400, headers: { 'content-type': 'application/json' } });
+        // validate type against config
+        const srcExt = extractExt(fileKeyIn) || extractExt(originalName) || (inferExtFromContentType(contentTypeIn) ? ('.' + inferExtFromContentType(contentTypeIn)) : '');
+        const extNoDot = (srcExt || '').slice(1).toLowerCase() || inferExtFromContentType(contentTypeIn);
+        if (!isAllowedByConfig(extNoDot, contentTypeIn, env)) {
+          return new Response(JSON.stringify({ error: 'unsupported_type' }), { status: 400, headers: { 'content-type': 'application/json' } });
+        }
+        const id = crypto.randomUUID();
+        const nowIso = new Date().toISOString();
+        const ownerUserId = String((authed as any)?.id || '');
+        try {
+          if (ownerUserId) {
+            const display = String((authed as any)?.user_metadata?.name || (authed as any)?.email || ownerUserId);
+            const uname = ownerUserId.slice(0, 10);
+            await env.DB.prepare(`INSERT OR IGNORE INTO users (id, username, displayName) VALUES (?, ?, ?)`).bind(ownerUserId, uname, display).run();
+          }
+        } catch {}
+        // dynamic insert like /api/upload
+        const colsInfo: any = await env.DB.prepare(`PRAGMA table_info(items)`).all();
+        const rowsInfo: any[] = colsInfo?.results ?? colsInfo ?? [];
+        const nameMap = new Map<string,string>();
+        for (const r of rowsInfo) {
+          const n = String(r.name ?? r.NAME ?? '').trim();
+          if (n) nameMap.set(n.toLowerCase(), n);
+        }
+        const present = (names: string[]) => names.map(n=>n).filter(n=>nameMap.has(n.toLowerCase())).map(n=>nameMap.get(n.toLowerCase()) as string);
+        const insertCols: string[] = [];
+        const insertVals: any[] = [];
+        const addedCols = new Set<string>();
+        const add = (c: string, v: any) => { if (addedCols.has(c)) return; addedCols.add(c); insertCols.push(c); insertVals.push(v); };
+        const addAny = (cands: string[], v: any) => { const list = present(cands); for (const c of list) add(c, v); };
+        addAny(['id'], id);
+        addAny(['ownerUserId','owner_user_id','OWNER_USER_ID'], ownerUserId);
+        addAny(['title','TITLE'], title);
+        addAny(['category','CATEGORY'], category);
+        addAny(['visibility','VISIBILITY'], visibility);
+        addAny(['description','DESCRIPTION'], description);
+        addAny(['prompt','PROMPT'], prompt);
+        addAny(['original_filename','originalFilename','ORIGINAL_FILENAME'], originalName);
+        addAny(['size_bytes','sizeBytes','SIZE_BYTES'], Number.isFinite(sizeBytes) ? sizeBytes : 0);
+        addAny(['file_key','fileKey','FILE_KEY'], fileKeyIn);
+        addAny(['contentType','CONTENT_TYPE'], contentTypeIn);
+        addAny(['extension','EXTENSION'], (srcExt || '').slice(1));
+        addAny(['thumbnail_key','thumbnailKey','THUMBNAIL_KEY'], String(body?.thumbnailKey || '') || null);
+        addAny(['created_at','createdAt','CREATED_AT'], nowIso);
+        addAny(['updated_at','updatedAt','UPDATED_AT'], nowIso);
+        const placeholders = insertCols.map(()=>'?').join(',');
+        const sqlIns = `INSERT INTO items (${insertCols.join(',')}) VALUES (${placeholders})`;
+        await env.DB.prepare(sqlIns).bind(...insertVals).run();
+        // tags
+        const tags = parseTags(tagsInputRaw);
+        let tagCreatedCol: string | undefined;
+        try {
+          const tinfo: any = await env.DB.prepare(`PRAGMA table_info(tags)`).all();
+          const trows: any[] = tinfo?.results ?? tinfo ?? [];
+          const tnames = new Set<string>(trows.map((r: any) => String(r.name ?? r.NAME ?? '').toLowerCase()));
+          if (tnames.has('created_at')) tagCreatedCol = 'created_at'; else if (tnames.has('createdat')) tagCreatedCol = 'createdAt';
+        } catch {}
+        if (tags.length) {
+          for (const label of tags) {
+            const slug = slugify(label);
+            if (tagCreatedCol) {
+              await env.DB.prepare(`INSERT OR IGNORE INTO tags (id, label, ${tagCreatedCol}) VALUES (?, ?, ?)`).bind(slug, label, nowIso).run();
+            } else {
+              await env.DB.prepare(`INSERT OR IGNORE INTO tags (id, label) VALUES (?, ?)`).bind(slug, label).run();
+            }
+            await env.DB.prepare(`INSERT OR IGNORE INTO item_tags (itemId, tagId) VALUES (?, ?)`).bind(id, slug).run();
+          }
+        }
+        return new Response(JSON.stringify({ ok: true, id, path: `/items/${id}` }), { headers: { 'content-type': 'application/json' } });
+      } catch (e: any) {
+        return new Response(JSON.stringify({ error: 'internal', message: String(e?.message || e) }), { status: 500, headers: { 'content-type': 'application/json' } });
+      }
+    }
+
     // publish toggle (owner only)
     {
       const m = /^\/api\/items\/([A-Za-z0-9_-]+)\/publish$/.exec(url.pathname);
@@ -900,12 +1111,12 @@ export default {
 
     // server-rendered minimal pages (after auth gate)
     if (req.method === 'GET') {
-      if (url.pathname === '/' || url.pathname === '/items') return renderItems(env, url);
+    if (url.pathname === '/' || url.pathname === '/items') return renderItems(env, url, req);
       const m = /^\/items\/([A-Za-z0-9_-]+)$/.exec(url.pathname);
       if (m) return renderItem(env, m[1], req);
       const mu = /^\/u\/([a-z0-9]{3,32})$/.exec(url.pathname);
       if (mu) return renderUser(env, mu[1], req);
-      if (url.pathname === '/upload') return renderUpload(env);
+      if (url.pathname === '/upload') return renderUpload(env, req);
     }
 
     // static assets then fallback
@@ -1000,7 +1211,25 @@ export class RateLimiter implements DurableObject {
   }
 }
 
-async function renderItems(env: Env, url: URL): Promise<Response> {
+async function renderItems(env: Env, url: URL, req?: Request): Promise<Response> {
+  // ヘッダー用ユーザー名（SSRで即時表示）
+  let usernameForHeader = '';
+  try {
+    if (req) {
+      const authed = await getAuthUser(req, env).catch(() => null);
+      const uid = String((authed as any)?.id || '');
+      if (uid) {
+        try {
+          const rowU: any = await env.DB.prepare(`SELECT username FROM users WHERE id = ? LIMIT 1`).bind(uid).first();
+          let un = String(rowU?.username ?? rowU?.USERNAME ?? '');
+          if (!/^[a-z0-9]{3,32}$/.test(un)) un = normalizeUsernameFromId(uid);
+          usernameForHeader = un;
+        } catch {
+          usernameForHeader = normalizeUsernameFromId(uid);
+        }
+      }
+    }
+  } catch {}
   const page = Math.max(1, Number(url.searchParams.get('page') || '1'));
   const pageSize = 20;
   const q = String(url.searchParams.get('q') || '').trim();
@@ -1125,7 +1354,7 @@ async function renderItems(env: Env, url: URL): Promise<Response> {
     ${filters}
     <div class="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(240px,1fr))] mt-3">${cards || '<div class="text-gray-500 text-sm">アイテムがありません</div>'}</div>
     ${pager}`;
-  return html(layout('一覧', body, { isLoggedIn: true, auth: { supaUrl: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY } }));
+  return html(layout('一覧', body, { isLoggedIn: true, username: usernameForHeader, auth: { supaUrl: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY } }));
 }
 
 async function renderItem(env: Env, id: string, req?: Request): Promise<Response> {
@@ -1205,10 +1434,6 @@ async function renderItem(env: Env, id: string, req?: Request): Promise<Response
       <div class="text-gray-500 text-xs">ダウンロード</div><div>${Number(it.downloadCount||0)}</div>
     </div>
   </div>`;
-
-  const shareUrl = `https://x.com/intent/tweet?url=${encodeURIComponent(globalThis.location?.href||'')}&text=${encodeURIComponent(it.title||'')}`;
-  const lineUrl = `https://line.me/R/msg/text/?${encodeURIComponent((it.title||'')+' '+(globalThis.location?.href||''))}`;
-  const fbUrl = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(globalThis.location?.href||'')}`;
   // 所有者向け: 公開/非公開トグル
   let ownerControls = '';
   try {
@@ -1238,6 +1463,25 @@ async function renderItem(env: Env, id: string, req?: Request): Promise<Response
   const prm = it.prompt ? `<div class=\"mt-4\"><div class=\"flex items-center justify-between\"><div class=\"text-gray-500 text-xs mb-1\">Prompt</div><button id=\"btnCopyPrompt\" class=\"inline-block px-2 py-1 text-xs border border-black rounded-md text-black hover:bg-black/5\">コピー</button></div><pre id=\"promptText\" class=\"whitespace-pre-wrap text-sm\">${escapeHtml(it.prompt)}</pre>
   <div class=\"mt-3\">\n    <div class=\"text-gray-500 text-xs mb-1\">共有</div>\n    <div class=\"flex items-center gap-2\">\n      <a id=\"btnShareX\" class=\"inline-flex items-center justify-center w-9 h-9 rounded-md border border-gray-300 text-gray-700 hover:bg-black/5\" target=\"_blank\" rel=\"noreferrer\" href=\"#\" title=\"Xでシェア\"><i class=\"fa-brands fa-x-twitter\"></i></a>\n      <a id=\"btnShareLine\" class=\"inline-flex items-center justify-center w-9 h-9 rounded-md border border-gray-300 text-gray-700 hover:bg-black/5\" target=\"_blank\" rel=\"noreferrer\" href=\"#\" title=\"LINEでシェア\"><i class=\"fa-brands fa-line\"></i></a>\n      <a id=\"btnShareFb\" class=\"inline-flex items-center justify-center w-9 h-9 rounded-md border border-gray-300 text-gray-700 hover:bg-black/5\" target=\"_blank\" rel=\"noreferrer\" href=\"#\" title=\"Facebookでシェア\"><i class=\"fa-brands fa-facebook\"></i></a>\n      <button id=\"btnCopyUrl\" class=\"group relative inline-flex items-center justify-center w-9 h-9 rounded-md border border-black text-black hover:bg-black/5\" title=\"クリックでコピー\"><i class=\"fa-solid fa-link\"></i><span class=\"pointer-events-none absolute -top-7 opacity-0 group-hover:opacity-100 transition bg-black text-white text-[10px] rounded px-2 py-0.5\">コピー</span></button>\n    </div>\n  </div>
   </div>` : '';
+
+  // ヘッダー用ユーザー名（SSRで即時表示）
+  let usernameForHeader = '';
+  try {
+    if (req) {
+      const authed2 = await getAuthUser(req, env).catch(() => null);
+      const uid2 = String((authed2 as any)?.id || '');
+      if (uid2) {
+        try {
+          const rowU2: any = await env.DB.prepare(`SELECT username FROM users WHERE id = ? LIMIT 1`).bind(uid2).first();
+          let un2 = String(rowU2?.username ?? rowU2?.USERNAME ?? '');
+          if (!/^[a-z0-9]{3,32}$/.test(un2)) un2 = normalizeUsernameFromId(uid2);
+          usernameForHeader = un2;
+        } catch {
+          usernameForHeader = normalizeUsernameFromId(uid2);
+        }
+      }
+    }
+  } catch {}
 
   const body = `
   <div class="flex items-start gap-4">
@@ -1344,7 +1588,7 @@ async function renderItem(env: Env, id: string, req?: Request): Promise<Response
   })();
   </script>
   `;
-  return html(layout(it.title || '詳細', body, { isLoggedIn: true, auth: { supaUrl: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY } }));
+  return html(layout(it.title || '詳細', body, { isLoggedIn: true, username: usernameForHeader, auth: { supaUrl: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY } }));
 }
 
 async function renderUser(env: Env, username: string, req?: Request): Promise<Response> {
@@ -1433,13 +1677,32 @@ async function renderUser(env: Env, username: string, req?: Request): Promise<Re
     </div>
   `).join('');
 
+  // ヘッダー用ユーザー名（SSRで即時表示）
+  let usernameForHeader = '';
+  try {
+    if (req) {
+      const authed = await getAuthUser(req, env).catch(()=>null);
+      const uid = String((authed as any)?.id || '');
+      if (uid) {
+        try {
+          const rowU: any = await env.DB.prepare(`SELECT username FROM users WHERE id = ? LIMIT 1`).bind(uid).first();
+          let un = String(rowU?.username ?? rowU?.USERNAME ?? '');
+          if (!/^[a-z0-9]{3,32}$/.test(un)) un = normalizeUsernameFromId(uid);
+          usernameForHeader = un;
+        } catch {
+          usernameForHeader = normalizeUsernameFromId(uid);
+        }
+      }
+    }
+  } catch {}
+
   const body = `
   <div>
     <h1 class="text-lg font-semibold">${escapeHtml(display)} の作品</h1>
     <div class="text-gray-500 text-sm">@${escapeHtml(username)}</div>
     <div class="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(240px,1fr))] mt-3">${cards || '<div class="text-gray-500 text-sm">アイテムがありません</div>'}</div>
   </div>`;
-  return html(layout(`${display} の作品`, body, { isLoggedIn: true, auth: { supaUrl: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY } }));
+  return html(layout(`${display} の作品`, body, { isLoggedIn: true, username: usernameForHeader, auth: { supaUrl: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY } }));
 }
 
 function mediaMarkup(it: any): string {
@@ -1461,7 +1724,25 @@ function mediaMarkup(it: any): string {
   return `<div class="bg-gray-100 rounded-md overflow-hidden mb-2"><img class="w-full h-auto block" src="${thumb}" alt="preview" loading="lazy" /></div>`;
 }
 
-async function renderUpload(env: Env): Promise<Response> {
+async function renderUpload(env: Env, req?: Request): Promise<Response> {
+  // ヘッダー用ユーザー名（SSRで即時表示）
+  let usernameForHeader = '';
+  try {
+    if (req) {
+      const authed = await getAuthUser(req, env).catch(() => null);
+      const uid = String((authed as any)?.id || '');
+      if (uid) {
+        try {
+          const rowU: any = await env.DB.prepare(`SELECT username FROM users WHERE id = ? LIMIT 1`).bind(uid).first();
+          let un = String(rowU?.username ?? rowU?.USERNAME ?? '');
+          if (!/^[a-z0-9]{3,32}$/.test(un)) un = normalizeUsernameFromId(uid);
+          usernameForHeader = un;
+        } catch {
+          usernameForHeader = normalizeUsernameFromId(uid);
+        }
+      }
+    }
+  } catch {}
   // 既存タグ取得
   let tagRows: any[] = [];
   try {
@@ -1622,7 +1903,7 @@ async function renderUpload(env: Env): Promise<Response> {
     });
   })();
   </script>`;
-  return html(layout('アップロード', body, { isLoggedIn: true, auth: { supaUrl: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY } }));
+  return html(layout('アップロード', body, { isLoggedIn: true, username: usernameForHeader, auth: { supaUrl: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY } }));
 }
 
 function escapeHtml(s: string): string {
@@ -1753,6 +2034,9 @@ async function ensureTables(env: Env): Promise<void> {
       { name: 'prompt', type: 'TEXT' },
       { name: 'original_filename', type: 'TEXT' },
       { name: 'size_bytes', type: 'INTEGER' },
+      { name: 'contentType', type: 'TEXT' },
+      { name: 'extension', type: 'TEXT' },
+      { name: 'downloadCount', type: 'INTEGER' },
       { name: 'file_key', type: 'TEXT' },
       { name: 'thumbnail_key', type: 'TEXT' },
       { name: 'published_at', type: 'TEXT' },
@@ -1872,7 +2156,10 @@ function inferExtFromContentType(ct: string): string {
   if (t === 'video/webm') return 'webm';
   if (t === 'audio/mpeg' || t === 'audio/mp3') return 'mp3';
   if (t === 'audio/wav' || t === 'audio/x-wav') return 'wav';
-  if (t === 'model/gltf-binary' || t === 'application/octet-stream') return '';
+  if (t === 'model/gltf-binary') return 'glb';
+  if (t === 'model/gltf+json') return 'gltf';
+  if (t === 'model/obj') return 'obj';
+  if (t === 'text/plain') return '';
   if (t === 'model/obj' || t === 'text/plain') return 'obj';
   return '';
 }
