@@ -107,13 +107,6 @@ async function getAuthUser(req: Request, env: Env): Promise<any | null> {
   return await fetchSupabaseUser(token, env);
 }
 
-function redirectToLogin(url: URL): Response {
-  const u = new URL('/login', url.origin);
-  const dest = url.pathname + (url.search || '');
-  u.searchParams.set('redirect', dest);
-  return Response.redirect(u, 302);
-}
-
 // login page removed. Header handles OAuth start.
 
 function authCallbackPage(env: Env, url: URL): Response {
