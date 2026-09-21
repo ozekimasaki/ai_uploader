@@ -194,7 +194,13 @@ export async function uploadForm(req: Request, env: Env, url: URL): Promise<Resp
     if (!(CATEGORIES as readonly string[]).includes(category)) return errRes('カテゴリーが不正です。');
 
     const maxMb = toInt(env.MAX_FILE_SIZE_MB, 2048);
-    const sizeBytes = preuploadedKey ? Number(form.get('sizeBytes') || 0) : Number((file as File).size || 0);
+    // 事前アップロード済みキーは R2 実測値を使う（存在確認 + sizeBytes の改竄対策）
+    let sizeBytes = Number((file as File)?.size || 0);
+    if (preuploadedKey) {
+      const head = await env.R2.head(preuploadedKey).catch(() => null);
+      if (!head) return errRes('アップロード済みファイルが見つかりません。', 400);
+      sizeBytes = head.size;
+    }
     if (Number.isFinite(maxMb) && sizeBytes / (1024 * 1024) > maxMb) {
       return errRes(`ファイルサイズが上限(${maxMb}MB)を超えています。`);
     }
@@ -223,8 +229,11 @@ export async function uploadForm(req: Request, env: Env, url: URL): Promise<Resp
 
     let thumbKey = '';
     if (thumbnail instanceof File && thumbnail.size > 0) {
+      const thumbCt = thumbnail.type || 'image/png';
+      // サムネイルは画像のみ受付（text/html 等の混入で stored XSS を防ぐ）
+      if (!thumbCt.startsWith('image/')) return errRes('サムネイルは画像ファイルのみ対応です。');
       thumbKey = `${MULTIPART_PREFIX}/${uid}/${id}/thumb${extractExt(thumbnail.name || '')}`;
-      await env.R2.put(thumbKey, thumbnail.stream(), { httpMetadata: { contentType: thumbnail.type || 'image/png' } });
+      await env.R2.put(thumbKey, thumbnail.stream(), { httpMetadata: { contentType: thumbCt } });
     }
 
     const originalName = preuploadedKey ? String(form.get('filename') || '') : (file as File).name || '';

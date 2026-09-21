@@ -14,6 +14,14 @@
   ::selection {
     background: color-mix(in oklch, var(--color-kumo-brand) 30%, transparent);
   }
+  /* 視覚効果を抑制する設定のユーザー向け */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      transition-duration: 0.01ms !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+    }
+  }
 }
 
 @layer components {
@@ -138,6 +146,9 @@
     background: var(--color-kumo-fill-hover);
     color: var(--text-color-kumo-default);
   }
+  button.badge {
+    cursor: pointer;
+  }
   .badge-info {
     border-color: transparent;
     background: var(--color-kumo-info-tint);
@@ -162,6 +173,12 @@
   .navlink:hover {
     color: var(--text-color-kumo-strong);
     background: var(--color-kumo-tint);
+  }
+  .navlink:focus-visible,
+  .link:focus-visible,
+  .badge:focus-visible {
+    outline: 2px solid var(--color-kumo-focus);
+    outline-offset: 2px;
   }
 
   .link {

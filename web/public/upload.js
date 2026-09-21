@@ -48,16 +48,23 @@
     }
   }
   dropZone?.addEventListener('click', () => fileEl?.click());
+  // キーボード操作（Enter/Space でファイル選択）
+  dropZone?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      fileEl?.click();
+    }
+  });
   dropZone?.addEventListener('dragover', (e) => {
     e.preventDefault();
-    dropZone.classList.add('border-blue-400', 'bg-blue-50');
+    dropZone.classList.add('border-kumo-focus', 'bg-kumo-tint');
   });
   dropZone?.addEventListener('dragleave', () => {
-    dropZone.classList.remove('border-blue-400', 'bg-blue-50');
+    dropZone.classList.remove('border-kumo-focus', 'bg-kumo-tint');
   });
   dropZone?.addEventListener('drop', (e) => {
     e.preventDefault();
-    dropZone.classList.remove('border-blue-400', 'bg-blue-50');
+    dropZone.classList.remove('border-kumo-focus', 'bg-kumo-tint');
     const f = e.dataTransfer?.files?.[0];
     if (f && fileEl) {
       try {
@@ -189,7 +196,7 @@
         const a = document.createElement('a');
         a.href = data.path;
         a.textContent = '詳細を開く';
-        a.className = 'text-blue-600 underline ml-2';
+        a.className = 'link underline ml-2';
         status.appendChild(a);
       }
       submitBtn?.removeAttribute('disabled');

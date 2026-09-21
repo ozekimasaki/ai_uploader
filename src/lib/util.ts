@@ -42,6 +42,11 @@ export function formatDate(v: string | number | Date | null): string {
   }
 }
 
+/** LIKE パターン用エスケープ（`ESCAPE '\\'` と併用し、% と _ をリテラルとして扱う） */
+export function escapeLike(s: string): string {
+  return s.replace(/[\\%_]/g, (m) => `\\${m}`);
+}
+
 export function slugify(s: string): string {
   return String(s).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'tag';
 }

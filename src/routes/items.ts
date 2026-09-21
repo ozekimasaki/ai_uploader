@@ -3,7 +3,7 @@ import { CATEGORIES } from '../env';
 import { ensureTables, fetchItem, loadTagsForItem, loadTagsForItems, normalizeItemRow } from '../lib/db';
 import { json, jsonError } from '../lib/http';
 import { createDownloadToken, enforceRateLimitByDo } from '../lib/rate-limit';
-import { extractExt, inferExtFromContentType, isAllowedByConfig, parseTags, slugify, toInt } from '../lib/util';
+import { escapeLike, extractExt, inferExtFromContentType, isAllowedByConfig, parseTags, slugify, toInt } from '../lib/util';
 
 const MULTIPART_PREFIX = 'uploads';
 const PAGE_SIZE = 20;
@@ -27,8 +27,8 @@ export async function listItemsApi(env: Env, url: URL): Promise<Response> {
       binds.push(categoryParam);
     }
     if (q) {
-      const like = `%${q}%`;
-      whereParts.push("(title LIKE ? OR description LIKE ? OR id IN (SELECT it.itemId FROM item_tags it JOIN tags t ON t.id = it.tagId WHERE t.label LIKE ? OR t.id LIKE ?))");
+      const like = `%${escapeLike(q)}%`;
+      whereParts.push("(title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR id IN (SELECT it.itemId FROM item_tags it JOIN tags t ON t.id = it.tagId WHERE t.label LIKE ? ESCAPE '\\' OR t.id LIKE ? ESCAPE '\\'))");
       binds.push(like, like, like, like);
     }
     if (tagParam) {

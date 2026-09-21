@@ -17,10 +17,11 @@ interface ParsedRange {
 }
 
 function parseRangeHeader(header: string, size: number): ParsedRange | 'invalid' | null {
+  // 非対応の形式（複数レンジ等）は RFC 的に Range を無視して 200 で返す
   const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
-  if (!m) return 'invalid';
+  if (!m) return null;
   const [, startS, endS] = m;
-  if (startS === '' && endS === '') return 'invalid';
+  if (startS === '' && endS === '') return null;
   if (startS === '') {
     // suffix: 末尾 N バイト
     const suffix = Number(endS);
@@ -92,7 +93,6 @@ export async function serveFile(req: Request, env: Env, url: URL, user: Supabase
 
   // トークン以外の直接アクセスはアイテムの公開範囲で認可
   if (!authorizedByToken) {
-    if (!user) return new Response('unauthorized', { status: 401 });
     const it = await fetchItemByFileKey(env, key);
     if (!it) return new Response('not found', { status: 404 });
     const isOwner = !!user.id && user.id === it.ownerUserId;
@@ -174,7 +174,9 @@ export async function serveThumbnail(_req: Request, env: Env, url: URL, user: Su
     const obj = await env.R2.get(key);
     if (!obj) return placeholderPng();
     const headers = new Headers();
-    headers.set('content-type', obj.httpMetadata?.contentType || 'image/jpeg');
+    // サムネイルは画像専用。text/html 等が登録された場合はバイナリとして返す（XSS 対策）
+    const ct = obj.httpMetadata?.contentType || 'image/jpeg';
+    headers.set('content-type', ct.startsWith('image/') ? ct : 'application/octet-stream');
     headers.set('cache-control', 'private, max-age=3600');
     headers.set('x-content-type-options', 'nosniff');
     if (obj.httpEtag) headers.set('etag', obj.httpEtag);

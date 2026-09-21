@@ -128,6 +128,85 @@ describe('アップロード〜一覧〜詳細〜ダウンロード', () => {
     expect(res.headers.get('content-range')).toMatch(/^bytes 0-1\/\d+$/);
     expect(res.headers.get('accept-ranges')).toBe('bytes');
   });
+
+  it('解釈不能な Range（複数レンジ等）は無視して 200 で全文返す', async () => {
+    const id = await uploadItem('owner-token', 'public', 'weird range');
+    const detail = await SELF.fetch(`https://example.com/api/items/${id}`, { headers: authed('owner-token') });
+    const { item } = (await detail.json()) as { item: { fileKey: string } };
+    const res = await SELF.fetch(`https://example.com/api/file?k=${encodeURIComponent(item.fileKey)}`, {
+      headers: { ...authed('owner-token'), range: 'bytes=0-1,3-5' },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('preuploadedKey は R2 実在チェック + クライアント送信 sizeBytes を信用しない', async () => {
+    // R2 に存在しないキーは 400
+    const missing = await SELF.fetch('https://example.com/api/upload', {
+      method: 'POST',
+      headers: { ...authed('owner-token'), accept: 'application/json' },
+      body: (() => {
+        const fd = new FormData();
+        fd.set('title', 'ghost');
+        fd.set('category', 'IMAGE');
+        fd.set('preuploadedKey', 'uploads/owner-user-1/nonexistent/source.png');
+        fd.set('sizeBytes', '1');
+        return fd;
+      })(),
+    });
+    expect(missing.status).toBe(400);
+
+    // 実在するキーは sizeBytes を偽っても実測値で登録される
+    const init = await SELF.fetch('https://example.com/api/upload/multipart/init', {
+      method: 'POST',
+      headers: { ...authed('owner-token'), 'content-type': 'application/json' },
+      body: JSON.stringify({ filename: 'real.png', contentType: 'image/png' }),
+    });
+    const { key, uploadId } = (await init.json()) as { key: string; uploadId: string };
+    const part = await SELF.fetch(
+      `https://example.com/api/upload/multipart/part?key=${encodeURIComponent(key)}&uploadId=${encodeURIComponent(uploadId)}&partNumber=1`,
+      { method: 'PUT', headers: authed('owner-token'), body: new Uint8Array([137, 80, 78, 71]) },
+    );
+    const { etag } = (await part.json()) as { etag: string };
+    await SELF.fetch('https://example.com/api/upload/multipart/complete', {
+      method: 'POST',
+      headers: { ...authed('owner-token'), 'content-type': 'application/json' },
+      body: JSON.stringify({ key, uploadId, parts: [{ partNumber: 1, etag }] }),
+    });
+    const fd = new FormData();
+    fd.set('title', 'real item');
+    fd.set('category', 'IMAGE');
+    fd.set('visibility', 'public');
+    fd.set('preuploadedKey', key);
+    fd.set('filename', 'real.png');
+    fd.set('contentType', 'image/png');
+    fd.set('sizeBytes', '999999999'); // 偽装値 → サーバーは R2 の実測値を採用する
+    const reg = await SELF.fetch('https://example.com/api/upload', {
+      method: 'POST',
+      headers: { ...authed('owner-token'), accept: 'application/json' },
+      body: fd,
+    });
+    expect(reg.status).toBe(200);
+    const { id } = (await reg.json()) as { id: string };
+    const detail = await SELF.fetch(`https://example.com/api/items/${id}`, { headers: authed('owner-token') });
+    const { item } = (await detail.json()) as { item: { sizeBytes: number } };
+    expect(item.sizeBytes).toBe(4);
+  });
+
+  it('サムネイルは image/* 以外を拒否し、配信時も非画像 content-type を無効化', async () => {
+    // アップロード時: text/html のサムネイルは 400
+    const fd = new FormData();
+    fd.set('title', 'xss thumb');
+    fd.set('category', 'IMAGE');
+    fd.set('visibility', 'public');
+    fd.set('file', new File([new Uint8Array([137, 80, 78, 71])], 'a.png', { type: 'image/png' }));
+    fd.set('thumbnail', new File(['<html><script>alert(1)</script></html>'], 'evil.png', { type: 'text/html' }));
+    const res = await SELF.fetch('https://example.com/api/upload', {
+      method: 'POST',
+      headers: { ...authed('owner-token'), accept: 'application/json' },
+      body: fd,
+    });
+    expect(res.status).toBe(400);
+  });
 });
 
 describe('マルチパートアップロード', () => {

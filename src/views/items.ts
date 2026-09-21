@@ -3,7 +3,7 @@ import { CATEGORIES, CATEGORY_LABELS } from '../env';
 import { getAuthUser } from '../lib/auth';
 import { ensureTables, getUsernameById, listAllTags, loadTagsForItems, normalizeItemRow } from '../lib/db';
 import { html } from '../lib/http';
-import { escapeHtml } from '../lib/util';
+import { escapeHtml, escapeLike } from '../lib/util';
 import { layout } from './layout';
 
 export function thumbnailUrl(it: { thumbnailKey?: string; fileKey?: string }): string {
@@ -35,12 +35,12 @@ function itemCard(it: ItemRow & { tags?: string[] }): string {
       </a>
       <div class="p-3">
         <div class="flex justify-between items-start gap-2">
-          <a href="/items/${escapeHtml(it.id)}" class="font-semibold text-sm text-kumo-strong no-underline hover:underline truncate">${escapeHtml(it.title)}</a>
+          <h2 class="font-semibold text-sm truncate min-w-0"><a href="/items/${escapeHtml(it.id)}" class="text-kumo-strong no-underline hover:underline">${escapeHtml(it.title)}</a></h2>
           <span class="badge shrink-0">${escapeHtml(categoryLabel(it.category))}</span>
         </div>
         <div class="text-kumo-subtle text-xs mt-2 flex items-center gap-3">
-          <span><i class="fa-solid fa-download mr-1"></i>${Number(it.downloadCount || 0)}</span>
-          <span><i class="fa-solid fa-eye mr-1"></i>${Number(it.viewCount || 0)}</span>
+          <span><i class="fa-solid fa-download mr-1" aria-hidden="true"></i>${Number(it.downloadCount || 0)}<span class="sr-only">ダウンロード</span></span>
+          <span><i class="fa-solid fa-eye mr-1" aria-hidden="true"></i>${Number(it.viewCount || 0)}<span class="sr-only">閲覧</span></span>
         </div>
         ${tags.length ? `<div class="mt-2 flex flex-wrap gap-1">${tags.map((tg) => `<a href="/items?tag=${encodeURIComponent(tg)}" class="badge">#${escapeHtml(tg)}</a>`).join('')}</div>` : ''}
       </div>
@@ -71,8 +71,8 @@ export async function renderItems(env: Env, url: URL, req: Request): Promise<Res
     binds.push(categoryParam);
   }
   if (q) {
-    const like = `%${q}%`;
-    whereParts.push("(title LIKE ? OR description LIKE ? OR id IN (SELECT it.itemId FROM item_tags it JOIN tags t ON t.id = it.tagId WHERE t.label LIKE ? OR t.id LIKE ?))");
+    const like = `%${escapeLike(q)}%`;
+    whereParts.push("(title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR id IN (SELECT it.itemId FROM item_tags it JOIN tags t ON t.id = it.tagId WHERE t.label LIKE ? ESCAPE '\\' OR t.id LIKE ? ESCAPE '\\'))");
     binds.push(like, like, like, like);
   }
   if (tagParam) {
@@ -111,11 +111,11 @@ export async function renderItems(env: Env, url: URL, req: Request): Promise<Res
     sp.set('page', String(p));
     return `/items?${sp.toString()}`;
   };
-  const pager = `<div class="flex gap-2 mt-5 items-center">
-    ${page > 1 ? `<a class="btn btn-sm" href="${pageHref(page - 1)}"><i class="fa-solid fa-chevron-left"></i> 前へ</a>` : ''}
-    <span class="text-xs text-kumo-subtle">${page} ページ目</span>
-    ${hasNext ? `<a class="btn btn-sm" href="${pageHref(page + 1)}">次へ <i class="fa-solid fa-chevron-right"></i></a>` : ''}
-  </div>`;
+  const pager = `<nav class="flex gap-2 mt-5 items-center" aria-label="ページネーション">
+    ${page > 1 ? `<a class="btn btn-sm" href="${pageHref(page - 1)}"><i class="fa-solid fa-chevron-left" aria-hidden="true"></i> 前へ</a>` : ''}
+    <span class="text-xs text-kumo-subtle" aria-current="page">${page} ページ目</span>
+    ${hasNext ? `<a class="btn btn-sm" href="${pageHref(page + 1)}">次へ <i class="fa-solid fa-chevron-right" aria-hidden="true"></i></a>` : ''}
+  </nav>`;
 
   const tagOptions = (await listAllTags(env, 100).catch(() => []))
     .map((tr) => `<option value="${escapeHtml(tr.label)}"></option>`)
@@ -125,24 +125,24 @@ export async function renderItems(env: Env, url: URL, req: Request): Promise<Res
   <form class="mt-4 mb-4 card p-3 grid gap-2 md:grid-cols-[1fr_160px_160px_130px_auto] items-center" method="get" action="/items">
     <div class="relative">
       <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-kumo-placeholder text-xs pointer-events-none"></i>
-      <input class="input pl-8" name="q" placeholder="キーワードで検索" value="${escapeHtml(q)}"/>
+      <input class="input pl-8" name="q" placeholder="キーワードで検索" aria-label="検索キーワード" value="${escapeHtml(q)}"/>
     </div>
-    <select class="input" name="category">
+    <select class="input" name="category" aria-label="カテゴリー">
       <option value="">全カテゴリ</option>
       ${CATEGORIES.map((c) => `<option value="${c}" ${categoryParam === c ? 'selected' : ''}>${CATEGORY_LABELS[c]}</option>`).join('')}
     </select>
-    <input class="input" name="tag" list="tags" placeholder="タグ" value="${escapeHtml(tagParam)}"/>
-    <select class="input" name="sort">
+    <input class="input" name="tag" list="tags" placeholder="タグ" aria-label="タグ" value="${escapeHtml(tagParam)}"/>
+    <select class="input" name="sort" aria-label="並び順">
       <option value="new" ${sort === 'new' ? 'selected' : ''}>新着順</option>
       <option value="popular" ${sort === 'popular' ? 'selected' : ''}>人気順</option>
     </select>
-    <button class="btn btn-primary"><i class="fa-solid fa-filter"></i> 絞り込み</button>
+    <button class="btn btn-primary"><i class="fa-solid fa-filter" aria-hidden="true"></i> 絞り込み</button>
     <datalist id="tags">${tagOptions}</datalist>
   </form>`;
 
   const body = `<h1 class="page-title">一覧</h1>
     ${filters}
-    <div class="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(220px,1fr))]">${items.map(itemCard).join('') || '<div class="card p-8 text-center text-kumo-subtle text-sm col-span-full"><i class="fa-regular fa-folder-open text-2xl mb-2 block"></i>アイテムがありません</div>'}</div>
+    <div class="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(220px,1fr))]">${items.map(itemCard).join('') || '<div class="card p-8 text-center text-kumo-subtle text-sm col-span-full"><i class="fa-regular fa-folder-open text-2xl mb-2 block" aria-hidden="true"></i>アイテムがありません</div>'}</div>
     ${pager}`;
   return html(layout('一覧', body, { isLoggedIn: true, username: usernameForHeader }), 200, env);
 }

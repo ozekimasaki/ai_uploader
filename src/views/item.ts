@@ -20,10 +20,10 @@ function mediaMarkup(it: ItemRow): string {
     return `<div class="well overflow-hidden"><video class="w-full h-auto" controls playsinline preload="metadata"${poster}><source src="${fileSrc}" type="${escapeHtml(it.contentType || 'video/mp4')}" /></video></div>`;
   }
   if (cat === 'MUSIC' || cat === 'VOICE') {
-    const img = it.thumbnailKey ? `<img class="w-16 h-16 object-cover rounded-md" src="${thumb}" alt="thumb" />` : '';
+    const img = it.thumbnailKey ? `<img class="w-16 h-16 object-cover rounded-md" src="${thumb}" alt="" />` : '';
     return `<div class="well p-4 flex items-center gap-3">${img}<audio controls preload="metadata" class="w-full"><source src="${fileSrc}" type="${escapeHtml(it.contentType || 'audio/mpeg')}" /></audio></div>`;
   }
-  return `<div class="well overflow-hidden"><img class="w-full h-auto block" src="${thumb}" alt="preview" loading="lazy" /></div>`;
+  return `<div class="well overflow-hidden"><img class="w-full h-auto block" src="${thumb}" alt="${escapeHtml(it.title)}" loading="lazy" /></div>`;
 }
 
 function metaRow(label: string, value: string): string {
@@ -68,8 +68,8 @@ export async function renderItem(env: Env, id: string, req: Request, ctx?: Execu
   const vis = String(it.visibility || '').toLowerCase() === 'public' ? 'public' : 'private';
   const visBadge =
     vis === 'public'
-      ? `<span class="badge badge-info"><i class="fa-solid fa-globe"></i> 公開</span>`
-      : `<span class="badge badge-warn"><i class="fa-solid fa-lock"></i> 非公開</span>`;
+      ? `<span class="badge badge-info"><i class="fa-solid fa-globe" aria-hidden="true"></i> 公開</span>`
+      : `<span class="badge badge-warn"><i class="fa-solid fa-lock" aria-hidden="true"></i> 非公開</span>`;
 
   const meta = `
   <div class="card p-4 mt-4 grid [grid-template-columns:88px_1fr] gap-x-3 gap-y-2">
@@ -84,15 +84,15 @@ export async function renderItem(env: Env, id: string, req: Request, ctx?: Execu
 
   const ownerControls = isOwner
     ? `
-    <button id="btnToggleVis" class="btn">${vis === 'public' ? '<i class="fa-solid fa-lock"></i> 非公開にする' : '<i class="fa-solid fa-globe"></i> 公開する'}</button>
-    <button id="btnDelete" class="btn btn-danger"><i class="fa-solid fa-trash"></i> 削除</button>`
+    <button id="btnToggleVis" class="btn">${vis === 'public' ? '<i class="fa-solid fa-lock" aria-hidden="true"></i> 非公開にする' : '<i class="fa-solid fa-globe" aria-hidden="true"></i> 公開する'}</button>
+    <button id="btnDelete" class="btn btn-danger"><i class="fa-solid fa-trash" aria-hidden="true"></i> 削除</button>`
     : '';
 
   const actions = `
   <div class="flex gap-2 flex-wrap mt-4 items-center">
-    <button id="btnDl" class="btn btn-primary"><i class="fa-solid fa-download"></i> ダウンロード</button>
+    <button id="btnDl" class="btn btn-primary"><i class="fa-solid fa-download" aria-hidden="true"></i> ダウンロード</button>
     ${ownerControls}
-    <button id="btnReport" class="btn btn-warn"><i class="fa-solid fa-flag"></i> 通報</button>
+    <button id="btnReport" class="btn btn-warn"><i class="fa-solid fa-flag" aria-hidden="true"></i> 通報</button>
   </div>`;
 
   const desc = it.description
@@ -101,13 +101,13 @@ export async function renderItem(env: Env, id: string, req: Request, ctx?: Execu
   const share = `
       <div class="meta-label mb-1">共有</div>
       <div class="flex items-center gap-2">
-        <a id="btnShareX" class="btn btn-sm" target="_blank" rel="noreferrer" href="#" title="Xでシェア"><i class="fa-brands fa-x-twitter"></i></a>
-        <a id="btnShareLine" class="btn btn-sm" target="_blank" rel="noreferrer" href="#" title="LINEでシェア"><i class="fa-brands fa-line"></i></a>
-        <a id="btnShareFb" class="btn btn-sm" target="_blank" rel="noreferrer" href="#" title="Facebookでシェア"><i class="fa-brands fa-facebook"></i></a>
-        <button id="btnCopyUrl" class="btn btn-sm" title="クリックでコピー"><i class="fa-solid fa-link"></i></button>
+        <a id="btnShareX" class="btn btn-sm" target="_blank" rel="noreferrer" href="#" title="Xでシェア" aria-label="Xでシェア（新しいタブ）"><i class="fa-brands fa-x-twitter" aria-hidden="true"></i></a>
+        <a id="btnShareLine" class="btn btn-sm" target="_blank" rel="noreferrer" href="#" title="LINEでシェア" aria-label="LINEでシェア（新しいタブ）"><i class="fa-brands fa-line" aria-hidden="true"></i></a>
+        <a id="btnShareFb" class="btn btn-sm" target="_blank" rel="noreferrer" href="#" title="Facebookでシェア" aria-label="Facebookでシェア（新しいタブ）"><i class="fa-brands fa-facebook" aria-hidden="true"></i></a>
+        <button id="btnCopyUrl" class="btn btn-sm" title="クリックでコピー" aria-label="URLをコピー"><i class="fa-solid fa-link" aria-hidden="true"></i></button>
       </div>`;
   const prm = it.prompt
-    ? `<div class="card p-4 mt-4"><div class="flex items-center justify-between mb-1"><div class="meta-label">Prompt</div><button id="btnCopyPrompt" class="btn btn-sm"><i class="fa-regular fa-copy"></i> コピー</button></div><pre id="promptText" class="well p-3 text-sm whitespace-pre-wrap font-mono">${escapeHtml(it.prompt)}</pre><div class="mt-4">${share}</div></div>`
+    ? `<div class="card p-4 mt-4"><div class="flex items-center justify-between mb-1"><div class="meta-label">Prompt</div><button id="btnCopyPrompt" class="btn btn-sm"><i class="fa-regular fa-copy" aria-hidden="true"></i> コピー</button></div><pre id="promptText" class="well p-3 text-sm whitespace-pre-wrap font-mono">${escapeHtml(it.prompt)}</pre><div class="mt-4">${share}</div></div>`
     : `<div class="card p-4 mt-4">${share}</div>`;
 
   const pageData = {
@@ -119,7 +119,7 @@ export async function renderItem(env: Env, id: string, req: Request, ctx?: Execu
   };
 
   const body = `
-  <div class="mb-4"><a class="link text-sm" href="/items"><i class="fa-solid fa-arrow-left"></i> 一覧へ</a></div>
+  <div class="mb-4"><a class="link text-sm" href="/items"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> 一覧へ</a></div>
   <div class="grid gap-5 md:grid-cols-[minmax(0,3fr)_minmax(280px,2fr)]">
     <div>${mediaMarkup(it)}</div>
     <div>
