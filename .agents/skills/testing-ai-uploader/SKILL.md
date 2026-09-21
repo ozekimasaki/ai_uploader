@@ -39,6 +39,11 @@ For curl, `Authorization: Bearer owner-token` also works and is exempt from the 
 - The upload form's submit-button click can be flaky under automation; pressing **Enter inside the title input** triggers implicit submission reliably (still exercises the same upload.js handler).
 - `pageSize` on /items is 20 — need >21 matching items to see the pager. Seed via D1 inserts.
 - viewCount increments via `ctx.waitUntil` after the response: first detail view shows 0, second shows 1, stays 1 (dedupe `view:{id}:{ip}` 1h).
+- **Console `400`s on `/api/thumbnail?k=…` may be the computer-use `annotateDom` harness** re-fetching DOM-truncated URLs (literal `...` → `..` in `k` → the bad-key guard returns 400). Check the Initiator column: `VM…`/`annotateDom` = harness noise, `page:NN` = real element. Don't report as an app error.
+- `/tmp` artifacts (e.g. the Supabase stub script) can be wiped between sessions/process restarts — recreate from this recipe if missing.
+- Responsive checks: DevTools device toolbar via `Ctrl+Shift+M`.
+- A broken-image icon on a thumbnail means the R2 object exists but is corrupt (check object bytes); truly missing objects get the 68-byte placeholder PNG.
+- `.dev.vars` is gitignored — never commit it (AGENTS.md rule).
 
 ## Devin Secrets Needed
 

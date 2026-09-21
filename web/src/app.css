@@ -157,6 +157,7 @@
     padding: 0.25rem 0.5rem;
     border-radius: 0.375rem;
     transition: color 0.1s, background-color 0.1s;
+    white-space: nowrap;
   }
   .navlink:hover {
     color: var(--text-color-kumo-strong);

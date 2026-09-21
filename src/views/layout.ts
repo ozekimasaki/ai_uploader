@@ -43,7 +43,7 @@ export function layout(title: string, body: string, opts?: LayoutOptions): strin
           <span class="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-kumo-brand text-kumo-inverse"><i class="fa-solid fa-cloud-arrow-up"></i></span>
           AI Uploader
         </a>
-        <nav class="flex gap-1 items-center" data-shared-header>${renderHeaderHtml(isLoggedIn, username)}</nav>
+        <nav class="flex gap-1 items-center overflow-x-auto" data-shared-header>${renderHeaderHtml(isLoggedIn, username)}</nav>
         <button id="btnTheme" class="btn btn-sm" title="テーマ切替" aria-label="テーマ切替"><i class="fa-solid fa-moon"></i></button>
       </div>
     </header>
