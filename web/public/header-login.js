@@ -21,13 +21,15 @@
       if (me?.loggedIn) {
         const nav = document.querySelector('[data-shared-header]');
         if (nav) {
-          const my = me.username ? `<a href="/u/${me.username}" class="text-blue-600">マイページ</a>` : '';
-          nav.innerHTML = `<a href="/items" class="text-blue-600">一覧</a>\n<a href="/upload" class="text-blue-600">アップロード</a>\n${my}\n<a href="/logout" class="text-gray-600">ログアウト</a>`;
+          const my = me.username ? `<a href="/u/${me.username}" class="navlink">マイページ</a>` : '';
+          nav.innerHTML = `<a href="/items" class="navlink">一覧</a>\n<a href="/upload" class="navlink">アップロード</a>\n${my}\n<a href="/logout" class="navlink">ログアウト</a>`;
         }
       }
     }catch(e){}
-    const btn = document.getElementById('btnHeaderLogin');
-    if (btn) btn.addEventListener('click', startLogin, { once: true });
+    // ログインボタン（ヘッダ・ヒーロー・ログイン要求カード）にまとめてバインド
+    document.querySelectorAll('#btnHeaderLogin, #btnHeroLogin').forEach((b) => {
+      b.addEventListener('click', startLogin, { once: true });
+    });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
   else bind();

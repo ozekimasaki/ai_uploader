@@ -15,7 +15,7 @@ export async function renderUpload(env: Env, req: Request): Promise<Response> {
 
   const tagRows = await listAllTags(env, 200).catch(() => [] as { id: string; label: string }[]);
   const tagChips = tagRows
-    .map((r) => `<button type="button" class="px-2 py-0.5 text-xs border border-gray-300 rounded-full hover:bg-black/5 tag-chip" data-label="${escapeHtml(r.label)}">#${escapeHtml(r.label)}</button>`)
+    .map((r) => `<button type="button" class="badge tag-chip" data-label="${escapeHtml(r.label)}">#${escapeHtml(r.label)}</button>`)
     .join('');
 
   const pageData = {
@@ -23,63 +23,69 @@ export async function renderUpload(env: Env, req: Request): Promise<Response> {
     allowedFileTypes: String(env.ALLOWED_FILE_TYPES || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
   };
 
-  const body = `<h1 class="text-lg font-semibold">アップロード</h1>
-  <form id="uploadForm" class="mt-3 space-y-3" method="post" action="/api/upload" enctype="multipart/form-data">
-    <div>
-      <label class="block text-xs text-gray-600 mb-1">タイトル（必須）</label>
-      <input name="title" required maxlength="200" class="w-full border border-gray-300 rounded-md px-3 py-2" />
+  const body = `<h1 class="page-title">アップロード</h1>
+  <p class="text-kumo-subtle text-sm mt-1 mb-4">AI 生成物（画像・動画・音声・3D モデル等）を登録します。大きなファイルは自動でマルチパートアップロードになります。</p>
+  <form id="uploadForm" class="card p-5 space-y-4" method="post" action="/api/upload" enctype="multipart/form-data">
+    <div class="grid gap-4 md:grid-cols-2">
+      <div>
+        <label class="label">タイトル（必須）</label>
+        <input name="title" required maxlength="200" class="input" placeholder="作品タイトル" />
+      </div>
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="label">カテゴリー（必須）</label>
+          <select name="category" required class="input">
+            ${CATEGORIES.map((c) => `<option value="${c}">${CATEGORY_LABELS[c]}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="label">公開範囲</label>
+          <select name="visibility" class="input">
+            <option value="private">非公開</option>
+            <option value="public">公開</option>
+          </select>
+        </div>
+      </div>
     </div>
     <div>
-      <label class="block text-xs text-gray-600 mb-1">カテゴリー（必須）</label>
-      <select name="category" required class="w-full border border-gray-300 rounded-md px-3 py-2">
-        ${CATEGORIES.map((c) => `<option value="${c}">${CATEGORY_LABELS[c]}</option>`).join('')}
-      </select>
+      <label class="label">説明</label>
+      <textarea name="description" rows="3" maxlength="5000" class="input" placeholder="作品の説明"></textarea>
     </div>
     <div>
-      <label class="block text-xs text-gray-600 mb-1">公開範囲</label>
-      <select name="visibility" class="w-full border border-gray-300 rounded-md px-3 py-2">
-        <option value="private">非公開</option>
-        <option value="public">公開</option>
-      </select>
+      <label class="label">Prompt</label>
+      <textarea name="prompt" rows="3" maxlength="10000" class="input font-mono" placeholder="生成に使ったプロンプト"></textarea>
     </div>
     <div>
-      <label class="block text-xs text-gray-600 mb-1">説明</label>
-      <textarea name="description" rows="3" maxlength="5000" class="w-full border border-gray-300 rounded-md px-3 py-2"></textarea>
+      <label class="label">タグ（最大5・3〜20文字）</label>
+      <input name="tags" id="tagsInput" placeholder="カンマ区切りまたは下の一覧から選択" class="input" />
+      <div class="mt-2 meta-label">登録済みタグ（クリックで追加）</div>
+      <div class="mt-1 flex flex-wrap gap-1" id="tagList">${tagChips || '<span class="text-xs text-kumo-inactive">（タグ未登録）</span>'}</div>
     </div>
     <div>
-      <label class="block text-xs text-gray-600 mb-1">Prompt</label>
-      <textarea name="prompt" rows="3" maxlength="10000" class="w-full border border-gray-300 rounded-md px-3 py-2"></textarea>
-    </div>
-    <div>
-      <label class="block text-xs text-gray-600 mb-1">タグ（最大5・3〜20文字）</label>
-      <input name="tags" id="tagsInput" placeholder="カンマ区切りまたは下の一覧から選択" class="w-full border border-gray-300 rounded-md px-3 py-2" />
-      <div class="mt-2 text-xs text-gray-500">登録済みタグ（クリックで追加）</div>
-      <div class="mt-1 flex flex-wrap gap-1" id="tagList">${tagChips || '<span class="text-xs text-gray-400">（タグ未登録）</span>'}</div>
-    </div>
-    <div>
-      <label class="block text-xs text-gray-600 mb-1">本体ファイル（必須・最大 ${escapeHtml(String(pageData.maxFileSizeMb))}MB）</label>
-      <div id="dropZone" class="border-2 border-dashed border-gray-300 rounded-md p-6 text-center text-sm text-gray-500 hover:border-gray-400 cursor-pointer">
+      <label class="label">本体ファイル（必須・最大 ${escapeHtml(String(pageData.maxFileSizeMb))}MB）</label>
+      <div id="dropZone" class="border-2 border-dashed border-kumo-line rounded-lg p-8 text-center text-sm text-kumo-subtle hover:border-kumo-focus hover:bg-kumo-tint cursor-pointer transition">
+        <i class="fa-solid fa-cloud-arrow-up text-2xl text-kumo-brand block mb-2"></i>
         クリックして選択、またはここにドラッグ＆ドロップ
         <input name="file" id="fileInput" type="file" required class="hidden" />
       </div>
-      <div id="fileInfo" class="text-xs text-gray-500 mt-1"></div>
+      <div id="fileInfo" class="text-xs text-kumo-subtle mt-1"></div>
     </div>
     <div>
-      <label class="block text-xs text-gray-600 mb-1">サムネイル（任意）</label>
-      <input name="thumbnail" type="file" accept="image/*" class="block" />
+      <label class="label">サムネイル（任意）</label>
+      <input name="thumbnail" type="file" accept="image/*" class="block text-sm text-kumo-subtle file:mr-3 file:px-3 file:py-1 file:rounded-md file:border file:border-kumo-line file:bg-kumo-base file:text-kumo-default file:cursor-pointer" />
     </div>
-    <div class="pt-2">
-      <button class="inline-block px-4 py-2 border border-black rounded-md text-black hover:bg-black/5">アップロード</button>
+    <div class="pt-1 border-t border-kumo-hairline">
+      <button class="btn btn-primary mt-3"><i class="fa-solid fa-upload"></i> アップロード</button>
     </div>
   </form>
-  <div id="progressTip" class="fixed bottom-4 right-4 w-72 shadow-lg rounded-md border border-gray-200 bg-white hidden">
-    <div class="px-3 py-2 border-b border-gray-100 flex justify-between items-center">
-      <div class="text-sm font-medium">アップロード中</div>
-      <button id="tipClose" class="text-gray-400 hover:text-gray-600 text-xs">閉じる</button>
+  <div id="progressTip" class="fixed bottom-4 right-4 w-72 card hidden">
+    <div class="px-3 py-2 border-b border-kumo-hairline flex justify-between items-center">
+      <div class="text-sm font-medium text-kumo-strong"><i class="fa-solid fa-spinner fa-spin mr-1"></i>アップロード中</div>
+      <button id="tipClose" class="text-kumo-subtle hover:text-kumo-strong text-xs">閉じる</button>
     </div>
     <div class="p-3">
-      <div class="h-2 bg-gray-100 rounded overflow-hidden"><div id="prog" class="bg-blue-500 h-2 w-0"></div></div>
-      <div id="status" class="text-xs text-gray-500 mt-1"></div>
+      <div class="h-2 bg-kumo-recessed rounded-full overflow-hidden"><div id="prog" class="bg-kumo-brand h-2 w-0 rounded-full transition-all"></div></div>
+      <div id="status" class="text-xs text-kumo-subtle mt-1"></div>
     </div>
   </div>
   <script type="application/json" id="page-data">${jsonForHtml(pageData)}</script>

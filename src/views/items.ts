@@ -29,17 +29,21 @@ function categoryLabel(c: string): string {
 function itemCard(it: ItemRow & { tags?: string[] }): string {
   const tags = it.tags ?? [];
   return `
-    <div class="border border-gray-200 rounded-lg p-3 bg-white">
-      <a href="/items/${escapeHtml(it.id)}" class="block bg-gray-100 rounded-md overflow-hidden mb-2 aspect-square">
+    <div class="card card-hover overflow-hidden">
+      <a href="/items/${escapeHtml(it.id)}" class="block bg-kumo-recessed aspect-square">
         <img class="w-full h-full object-cover block" src="${thumbnailUrl(it)}" alt="${escapeHtml(it.title)}" loading="lazy" />
       </a>
-      <div class="flex justify-between items-center gap-2">
-        <div class="font-semibold truncate">${escapeHtml(it.title)}</div>
-        <a class="shrink-0 inline-block px-3 py-1.5 border border-black rounded-md text-black hover:bg-black/5" href="/items/${escapeHtml(it.id)}">詳細</a>
+      <div class="p-3">
+        <div class="flex justify-between items-start gap-2">
+          <a href="/items/${escapeHtml(it.id)}" class="font-semibold text-sm text-kumo-strong no-underline hover:underline truncate">${escapeHtml(it.title)}</a>
+          <span class="badge shrink-0">${escapeHtml(categoryLabel(it.category))}</span>
+        </div>
+        <div class="text-kumo-subtle text-xs mt-2 flex items-center gap-3">
+          <span><i class="fa-solid fa-download mr-1"></i>${Number(it.downloadCount || 0)}</span>
+          <span><i class="fa-solid fa-eye mr-1"></i>${Number(it.viewCount || 0)}</span>
+        </div>
+        ${tags.length ? `<div class="mt-2 flex flex-wrap gap-1">${tags.map((tg) => `<a href="/items?tag=${encodeURIComponent(tg)}" class="badge">#${escapeHtml(tg)}</a>`).join('')}</div>` : ''}
       </div>
-      <div class="text-gray-500 text-xs mt-1.5">${escapeHtml(categoryLabel(it.category))}</div>
-      <div class="text-gray-500 text-xs mt-1.5">DL: ${Number(it.downloadCount || 0)} / 閲覧: ${Number(it.viewCount || 0)}</div>
-      ${tags.length ? `<div class="mt-1.5 flex flex-wrap gap-1">${tags.map((tg) => `<a href="/items?tag=${encodeURIComponent(tg)}" class="text-xs px-2 py-0.5 rounded-full border border-gray-200 hover:bg-black/5">#${escapeHtml(tg)}</a>`).join('')}</div>` : ''}
     </div>
   `;
 }
@@ -90,9 +94,9 @@ export async function renderItems(env: Env, url: URL, req: Request): Promise<Res
     const tagMap = await loadTagsForItems(env, mapped.map((it) => it.id)).catch(() => ({} as Record<string, string[]>));
     items = mapped.map((it) => ({ ...it, tags: tagMap[it.id] ?? [] }));
   } catch (e) {
-    const body = `<h1 class="text-lg font-semibold">一覧</h1>
-    <p class="text-gray-500 text-sm">データ取得に失敗しました。テーブル未作成の可能性があります。</p>
-    <pre class="text-gray-500 text-xs whitespace-pre-wrap">${escapeHtml(String((e as Error)?.message || e))}</pre>`;
+    const body = `<h1 class="page-title">一覧</h1>
+    <p class="text-kumo-subtle text-sm mt-2">データ取得に失敗しました。テーブル未作成の可能性があります。</p>
+    <pre class="text-kumo-subtle text-xs whitespace-pre-wrap mt-2 well p-3">${escapeHtml(String((e as Error)?.message || e))}</pre>`;
     return html(layout('一覧', body, { isLoggedIn: true, username: usernameForHeader }), 200, env);
   }
 
@@ -107,9 +111,10 @@ export async function renderItems(env: Env, url: URL, req: Request): Promise<Res
     sp.set('page', String(p));
     return `/items?${sp.toString()}`;
   };
-  const pager = `<div class="flex gap-2 mt-4">
-    ${page > 1 ? `<a class="border border-gray-200 rounded-md px-3 py-1.5" href="${pageHref(page - 1)}">前へ</a>` : ''}
-    ${hasNext ? `<a class="border border-gray-200 rounded-md px-3 py-1.5" href="${pageHref(page + 1)}">次へ</a>` : ''}
+  const pager = `<div class="flex gap-2 mt-5 items-center">
+    ${page > 1 ? `<a class="btn btn-sm" href="${pageHref(page - 1)}"><i class="fa-solid fa-chevron-left"></i> 前へ</a>` : ''}
+    <span class="text-xs text-kumo-subtle">${page} ページ目</span>
+    ${hasNext ? `<a class="btn btn-sm" href="${pageHref(page + 1)}">次へ <i class="fa-solid fa-chevron-right"></i></a>` : ''}
   </div>`;
 
   const tagOptions = (await listAllTags(env, 100).catch(() => []))
@@ -117,24 +122,27 @@ export async function renderItems(env: Env, url: URL, req: Request): Promise<Res
     .join('');
 
   const filters = `
-  <form class="mt-2 mb-3 grid gap-2 md:grid-cols-4" method="get" action="/items">
-    <input class="border border-gray-300 rounded-md px-3 py-2" name="q" placeholder="キーワード" value="${escapeHtml(q)}"/>
-    <select class="border border-gray-300 rounded-md px-3 py-2" name="category">
+  <form class="mt-4 mb-4 card p-3 grid gap-2 md:grid-cols-[1fr_160px_160px_130px_auto] items-center" method="get" action="/items">
+    <div class="relative">
+      <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-kumo-placeholder text-xs pointer-events-none"></i>
+      <input class="input pl-8" name="q" placeholder="キーワードで検索" value="${escapeHtml(q)}"/>
+    </div>
+    <select class="input" name="category">
       <option value="">全カテゴリ</option>
       ${CATEGORIES.map((c) => `<option value="${c}" ${categoryParam === c ? 'selected' : ''}>${CATEGORY_LABELS[c]}</option>`).join('')}
     </select>
-    <input class="border border-gray-300 rounded-md px-3 py-2" name="tag" list="tags" placeholder="タグ" value="${escapeHtml(tagParam)}"/>
-    <select class="border border-gray-300 rounded-md px-3 py-2" name="sort">
-      <option value="new" ${sort === 'new' ? 'selected' : ''}>新着</option>
-      <option value="popular" ${sort === 'popular' ? 'selected' : ''}>人気</option>
+    <input class="input" name="tag" list="tags" placeholder="タグ" value="${escapeHtml(tagParam)}"/>
+    <select class="input" name="sort">
+      <option value="new" ${sort === 'new' ? 'selected' : ''}>新着順</option>
+      <option value="popular" ${sort === 'popular' ? 'selected' : ''}>人気順</option>
     </select>
-    <div class="md:col-span-4"><button class="mt-1 inline-block px-4 py-2 border border-black rounded-md text-black hover:bg-black/5">絞り込み</button></div>
+    <button class="btn btn-primary"><i class="fa-solid fa-filter"></i> 絞り込み</button>
     <datalist id="tags">${tagOptions}</datalist>
   </form>`;
 
-  const body = `<h1 class="text-lg font-semibold">一覧</h1>
+  const body = `<h1 class="page-title">一覧</h1>
     ${filters}
-    <div class="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(240px,1fr))] mt-3">${items.map(itemCard).join('') || '<div class="text-gray-500 text-sm">アイテムがありません</div>'}</div>
+    <div class="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(220px,1fr))]">${items.map(itemCard).join('') || '<div class="card p-8 text-center text-kumo-subtle text-sm col-span-full"><i class="fa-regular fa-folder-open text-2xl mb-2 block"></i>アイテムがありません</div>'}</div>
     ${pager}`;
   return html(layout('一覧', body, { isLoggedIn: true, username: usernameForHeader }), 200, env);
 }

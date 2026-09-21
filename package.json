@@ -45,5 +45,8 @@
   "optionalDependencies": {
     "@rollup/rollup-linux-x64-gnu": "*",
     "@rollup/wasm-node": "*"
+  },
+  "dependencies": {
+    "@cloudflare/kumo": "^2.14.0"
   }
 }

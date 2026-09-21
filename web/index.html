@@ -4,23 +4,56 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AI Uploader</title>
+  <link rel="icon" href="/favicon.ico" />
+  <script src="/theme.js"></script>
   <link rel="stylesheet" href="/app.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
   </head>
-  <body>
-    <header class="border-b border-gray-200 h-14 flex items-center">
-      <div class="max-w-[980px] mx-auto px-4 w-full flex justify-between">
-        <a href="/" class="font-semibold text-gray-900">AI Uploader</a>
-        <nav class="flex gap-3" data-shared-header>
-          <button id="btnHeaderLogin" class="text-blue-600">ログイン</button>
+  <body class="min-h-screen flex flex-col">
+    <header class="sticky top-0 z-10 border-b border-kumo-line bg-kumo-base/90 backdrop-blur">
+      <div class="max-w-[1100px] mx-auto px-4 w-full h-14 flex items-center justify-between gap-4">
+        <a href="/" class="flex items-center gap-2 font-semibold text-kumo-strong no-underline">
+          <span class="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-kumo-brand text-kumo-inverse"><i class="fa-solid fa-cloud-arrow-up"></i></span>
+          AI Uploader
+        </a>
+        <nav class="flex gap-1 items-center" data-shared-header>
+          <button id="btnHeaderLogin" class="btn btn-primary btn-sm"><i class="fa-brands fa-discord"></i> ログイン</button>
         </nav>
+        <button id="btnTheme" class="btn btn-sm" title="テーマ切替" aria-label="テーマ切替"><i class="fa-solid fa-moon"></i></button>
       </div>
     </header>
-    <main class="max-w-[980px] mx-auto px-4 py-4">
-      <h1 class="text-lg font-semibold">AI Uploader</h1>
-      <p class="text-gray-500 text-sm mt-1">AI 生成物（画像・動画・音声・音楽・3Dモデル）のアップロード・公開・ダウンロードができます。利用にはログインが必要です。</p>
+    <main class="max-w-[1100px] mx-auto px-4 py-6 w-full flex-1">
+      <section class="text-center py-16">
+        <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-kumo-brand text-kumo-inverse text-3xl mb-5"><i class="fa-solid fa-cloud-arrow-up"></i></div>
+        <h1 class="text-3xl font-bold text-kumo-strong tracking-tight">AI Uploader</h1>
+        <p class="text-kumo-subtle text-sm mt-3 max-w-md mx-auto">AI 生成物（画像・動画・音声・音楽・3Dモデル）をアップロード・公開・ダウンロードするためのプラットフォーム。Cloudflare Workers 上で動作します。</p>
+        <div class="mt-6 flex gap-3 justify-center">
+          <button id="btnHeroLogin" class="btn btn-primary"><i class="fa-brands fa-discord"></i> Discord でログイン</button>
+        </div>
+      </section>
+      <section class="grid gap-4 md:grid-cols-3 max-w-3xl mx-auto">
+        <div class="card p-5 text-center">
+          <i class="fa-solid fa-upload text-kumo-brand text-xl mb-2"></i>
+          <div class="font-semibold text-sm text-kumo-strong">アップロード</div>
+          <p class="text-xs text-kumo-subtle mt-1">大容量ファイルはマルチパートで高速アップロード。タグ・Prompt も登録できます。</p>
+        </div>
+        <div class="card p-5 text-center">
+          <i class="fa-solid fa-share-nodes text-kumo-brand text-xl mb-2"></i>
+          <div class="font-semibold text-sm text-kumo-strong">公開・共有</div>
+          <p class="text-xs text-kumo-subtle mt-1">公開/非公開を切り替え、作品ページを SNS で共有。検索・タグ・人気順で発見できます。</p>
+        </div>
+        <div class="card p-5 text-center">
+          <i class="fa-solid fa-shield-halved text-kumo-brand text-xl mb-2"></i>
+          <div class="font-semibold text-sm text-kumo-strong">安全なダウンロード</div>
+          <p class="text-xs text-kumo-subtle mt-1">使い捨てダウンロード URL とレート制限でコンテンツを保護。Range 対応で動画シークも快適。</p>
+        </div>
+      </section>
     </main>
-    <footer class="border-t border-gray-200">
-      <div class="max-w-[980px] mx-auto px-4 py-3 text-xs text-gray-500">© <span id="y"></span> AI Uploader</div>
+    <footer class="border-t border-kumo-line">
+      <div class="max-w-[1100px] mx-auto px-4 py-4 text-xs text-kumo-subtle flex justify-between items-center">
+        <span>© <span id="y"></span> AI Uploader</span>
+        <span>Powered by Cloudflare Workers + Kumo</span>
+      </div>
     </footer>
     <script type="module" src="/ui-shared.js"></script>
     <script type="module" src="/header-login.js"></script>

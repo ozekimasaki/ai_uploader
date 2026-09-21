@@ -9,16 +9,19 @@ export interface LayoutOptions {
 
 export function renderHeaderHtml(isLoggedIn: boolean, username?: string): string {
   if (isLoggedIn) {
-    const my = username ? `\n            <a href="/u/${escapeHtml(username)}" class="text-blue-600">マイページ</a>` : '';
-    return `<a href="/items" class="text-blue-600">一覧</a>
-            <a href="/upload" class="text-blue-600">アップロード</a>${my}
-            <a href="/logout" class="text-gray-600">ログアウト</a>`;
+    const my = username ? `\n            <a href="/u/${escapeHtml(username)}" class="navlink">マイページ</a>` : '';
+    return `<a href="/items" class="navlink">一覧</a>
+            <a href="/upload" class="navlink">アップロード</a>${my}
+            <a href="/logout" class="navlink">ログアウト</a>`;
   }
-  return `<button id="btnHeaderLogin" class="text-blue-600">ログイン</button>`;
+  return `<button id="btnHeaderLogin" class="btn btn-primary btn-sm"><i class="fa-brands fa-discord"></i> ログイン</button>`;
 }
 
 export function renderFooterHtml(): string {
-  return `<div class="max-w-[980px] mx-auto px-4 py-3 text-xs text-gray-500">© <span id="y"></span> AI Uploader</div>`;
+  return `<div class="max-w-[1100px] mx-auto px-4 py-4 text-xs text-kumo-subtle flex justify-between items-center">
+    <span>© <span id="y"></span> AI Uploader</span>
+    <span>Powered by Cloudflare Workers + Kumo</span>
+  </div>`;
 }
 
 export function layout(title: string, body: string, opts?: LayoutOptions): string {
@@ -27,19 +30,25 @@ export function layout(title: string, body: string, opts?: LayoutOptions): strin
   return `<!doctype html><html lang="ja"><head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${escapeHtml(title)}</title>
+  <title>${escapeHtml(title)} | AI Uploader</title>
+  <link rel="icon" href="/favicon.ico" />
+  <script src="/theme.js"></script>
   <link rel="stylesheet" href="/app.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/plyr@3/dist/plyr.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
-  </head><body>
-    <header class="border-b border-gray-200 h-14 flex items-center">
-      <div class="max-w-[980px] mx-auto px-4 w-full flex justify-between">
-        <a href="/" class="font-semibold text-gray-900">AI Uploader</a>
-        <nav class="flex gap-3" data-shared-header>${renderHeaderHtml(isLoggedIn, username)}</nav>
+  </head><body class="min-h-screen flex flex-col">
+    <header class="sticky top-0 z-10 border-b border-kumo-line bg-kumo-base/90 backdrop-blur">
+      <div class="max-w-[1100px] mx-auto px-4 w-full h-14 flex items-center justify-between gap-4">
+        <a href="/" class="flex items-center gap-2 font-semibold text-kumo-strong no-underline">
+          <span class="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-kumo-brand text-kumo-inverse"><i class="fa-solid fa-cloud-arrow-up"></i></span>
+          AI Uploader
+        </a>
+        <nav class="flex gap-1 items-center" data-shared-header>${renderHeaderHtml(isLoggedIn, username)}</nav>
+        <button id="btnTheme" class="btn btn-sm" title="テーマ切替" aria-label="テーマ切替"><i class="fa-solid fa-moon"></i></button>
       </div>
     </header>
-    <main class="max-w-[980px] mx-auto px-4 py-4">${body}</main>
-    <footer class="border-t border-gray-200">${renderFooterHtml()}</footer>
+    <main class="max-w-[1100px] mx-auto px-4 py-6 w-full flex-1">${body}</main>
+    <footer class="border-t border-kumo-line">${renderFooterHtml()}</footer>
   <script src="https://cdn.jsdelivr.net/npm/plyr@3/dist/plyr.polyfilled.min.js"></script>
   <script src="/plyr-init.js"></script>
   <script type="module" src="/header-login.js"></script>
@@ -48,8 +57,12 @@ export function layout(title: string, body: string, opts?: LayoutOptions): strin
 }
 
 export function renderLoginRequiredHtml(): string {
-  return `<h1 class="text-lg font-semibold">ログインが必要です</h1>
-  <p class="text-gray-500 text-sm mt-1">右上の「ログイン」から認証してください。</p>`;
+  return `<div class="card max-w-md mx-auto mt-16 p-8 text-center">
+  <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-kumo-tint text-kumo-subtle mb-3"><i class="fa-solid fa-lock text-lg"></i></div>
+  <h1 class="page-title">ログインが必要です</h1>
+  <p class="text-kumo-subtle text-sm mt-2 mb-4">このページの閲覧にはログインが必要です。Discord アカウントでログインしてください。</p>
+  <button id="btnHeaderLogin" class="btn btn-primary"><i class="fa-brands fa-discord"></i> Discord でログイン</button>
+  </div>`;
 }
 
 export function loginRequiredPage(env: Env): Response {
@@ -57,13 +70,18 @@ export function loginRequiredPage(env: Env): Response {
 }
 
 export function errorPage(env: Env, title: string, message: string, status = 400, opts?: LayoutOptions): Response {
-  const body = `<h1 class="text-lg font-semibold">エラー</h1><p class="text-sm text-red-600">${escapeHtml(message)}</p>`;
+  const body = `<div class="card max-w-md mx-auto mt-16 p-8 text-center">
+  <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-kumo-danger-tint text-kumo-danger mb-3"><i class="fa-solid fa-triangle-exclamation text-lg"></i></div>
+  <h1 class="page-title">エラー</h1>
+  <p class="text-sm text-kumo-danger mt-2">${escapeHtml(message)}</p></div>`;
   return html(layout(title, body, opts), status, env);
 }
 
 export function notFoundPage(env: Env, message = 'ページが見つかりません。', opts?: LayoutOptions): Response {
-  const body = `<h1 class="text-lg font-semibold">見つかりません</h1>
-  <p class="text-gray-500 text-sm">${escapeHtml(message)}</p>
-  <p><a class="inline-block px-3 py-1.5 border border-black rounded-md text-black hover:bg-black/5" href="/items">一覧へ戻る</a></p>`;
+  const body = `<div class="card max-w-md mx-auto mt-16 p-8 text-center">
+  <div class="inline-flex items-center justify-center w-12 h-12 rounded-full bg-kumo-tint text-kumo-subtle mb-3"><i class="fa-solid fa-magnifying-glass text-lg"></i></div>
+  <h1 class="page-title">見つかりません</h1>
+  <p class="text-kumo-subtle text-sm mt-2 mb-4">${escapeHtml(message)}</p>
+  <a class="btn" href="/items"><i class="fa-solid fa-arrow-left"></i> 一覧へ戻る</a></div>`;
   return html(layout('見つかりません', body, opts), 404, env);
 }

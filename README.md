@@ -9,7 +9,7 @@ AI 生成物（画像・動画・音声・音楽・3D モデルなど）をア�
 - メタデータ DB: Cloudflare D1（SQLite 互換。`items` / `tags` / `item_tags` / `users` / `reports`）
 - レート制御 / 使い捨てダウンロードトークン: Durable Objects（`RateLimiter`）
 - 認証: Supabase Auth（Discord OAuth）。アクセストークンは `sb-access-token` Cookie で保持
-- フロントエンド: Workers による SSR HTML + バニラ JS（`web/public/*.js`）、Tailwind CSS v4
+- フロントエンド: Workers による SSR HTML + バニラ JS（`web/public/*.js`）、Tailwind CSS v4 + Cloudflare [Kumo](https://github.com/cloudflare/kumo) デザイントークン（ライト/ダークモード対応）
 - メディア再生: [Plyr](https://plyr.io/)（CDN 読み込み）
 - ビルドツール: Vite 7
 - テスト: Vitest 4 + `@cloudflare/vitest-pool-workers`（Miniflare 上で Worker ごと実行）
@@ -19,6 +19,8 @@ AI 生成物（画像・動画・音声・音楽・3D モデルなど）をア�
 > 補足: `plan.md` には将来構想として React / GSAP 等の記載がありますが、現状の実装には含まれていません。本 README は実際のコードに基づいて記述しています。
 
 ## 主な機能
+
+> 画面・API・使い方の詳細は [docs/FEATURES.md](docs/FEATURES.md) を参照。
 
 - アップロード
   - 通常アップロード: `POST /api/upload`（FormData）
