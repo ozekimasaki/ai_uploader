@@ -1,0 +1,5 @@
+# ローカル開発用シークレット（.dev.vars にコピーして使用。Git 管理対象外）
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=your-anon-key
+# 任意: 通報の Discord Webhook 通知
+# DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
