@@ -97,6 +97,25 @@ describe('アップロード〜一覧〜詳細〜ダウンロード', () => {
     expect(again.status).toBe(410);
   });
 
+  it('HEAD は使い捨てトークンを消費しない', async () => {
+    const id = await uploadItem('owner-token', 'public', 'head me');
+    const res = await SELF.fetch(`https://example.com/api/items/${id}/download-url`, {
+      method: 'POST',
+      headers: { ...authed('other-token'), 'content-type': 'application/json' },
+      body: '{}',
+    });
+    const { url } = (await res.json()) as { url: string };
+
+    const head = await SELF.fetch(`https://example.com${url}`, { method: 'HEAD', headers: authed('other-token') });
+    expect(head.status).toBe(200);
+
+    // HEAD の後でも GET は成功し、その後初めて消費済みになる
+    const file = await SELF.fetch(`https://example.com${url}`, { headers: authed('other-token') });
+    expect(file.status).toBe(200);
+    const again = await SELF.fetch(`https://example.com${url}`, { headers: authed('other-token') });
+    expect(again.status).toBe(410);
+  });
+
   it('publish 切替で一覧に出る/消える', async () => {
     const id = await uploadItem('owner-token', 'private', 'toggle me');
     const pub = await SELF.fetch(`https://example.com/api/items/${id}/publish`, {
@@ -187,6 +206,48 @@ describe('アップロード〜一覧〜詳細〜ダウンロード', () => {
     });
     expect(reg.status).toBe(200);
     const { id } = (await reg.json()) as { id: string };
+    const detail = await SELF.fetch(`https://example.com/api/items/${id}`, { headers: authed('owner-token') });
+    const { item } = (await detail.json()) as { item: { sizeBytes: number } };
+    expect(item.sizeBytes).toBe(4);
+  });
+
+  it('POST /api/items は他人の thumbnailKey を拒否し、sizeBytes は R2 実測値', async () => {
+    const init = await SELF.fetch('https://example.com/api/upload/multipart/init', {
+      method: 'POST',
+      headers: { ...authed('owner-token'), 'content-type': 'application/json' },
+      body: JSON.stringify({ filename: 'reg.png', contentType: 'image/png' }),
+    });
+    const { key, uploadId } = (await init.json()) as { key: string; uploadId: string };
+    const part = await SELF.fetch(
+      `https://example.com/api/upload/multipart/part?key=${encodeURIComponent(key)}&uploadId=${encodeURIComponent(uploadId)}&partNumber=1`,
+      { method: 'PUT', headers: authed('owner-token'), body: new Uint8Array([137, 80, 78, 71]) },
+    );
+    const { etag } = (await part.json()) as { etag: string };
+    await SELF.fetch('https://example.com/api/upload/multipart/complete', {
+      method: 'POST',
+      headers: { ...authed('owner-token'), 'content-type': 'application/json' },
+      body: JSON.stringify({ key, uploadId, parts: [{ partNumber: 1, etag }] }),
+    });
+
+    // 他人の staging キーを thumbnailKey に指定 → 403
+    const stolenThumb = await SELF.fetch('https://example.com/api/items', {
+      method: 'POST',
+      headers: { ...authed('owner-token'), 'content-type': 'application/json' },
+      body: JSON.stringify({
+        title: 'stolen thumb', category: 'IMAGE', fileKey: key,
+        thumbnailKey: 'uploads/other-user-2/x/thumb.png',
+      }),
+    });
+    expect(stolenThumb.status).toBe(403);
+
+    // 正常系: sizeBytes を 1 と偽っても R2 実測値で登録される
+    const ok = await SELF.fetch('https://example.com/api/items', {
+      method: 'POST',
+      headers: { ...authed('owner-token'), 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'json reg', category: 'IMAGE', fileKey: key, sizeBytes: 1 }),
+    });
+    expect(ok.status).toBe(200);
+    const { id } = (await ok.json()) as { id: string };
     const detail = await SELF.fetch(`https://example.com/api/items/${id}`, { headers: authed('owner-token') });
     const { item } = (await detail.json()) as { item: { sizeBytes: number } };
     expect(item.sizeBytes).toBe(4);

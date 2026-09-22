@@ -36,7 +36,8 @@ export async function listItemsApi(env: Env, url: URL): Promise<Response> {
       binds.push(tagParam, tagParam);
     }
     let orderBy = "COALESCE(createdAt, created_at, '') DESC, rowid DESC";
-    if (sort === 'popular') orderBy = "COALESCE(downloadCount, 0) DESC, COALESCE(createdAt, created_at, '') DESC, rowid DESC";
+    // 画面側（views/items.ts）と同じ優先度: DL数 → 閲覧数 → 作成日時
+    if (sort === 'popular') orderBy = "COALESCE(downloadCount, 0) DESC, COALESCE(viewCount, 0) DESC, COALESCE(createdAt, created_at, '') DESC, rowid DESC";
     const limit = PAGE_SIZE + 1;
     const offset = (page - 1) * PAGE_SIZE;
     const res = await env.DB.prepare(`SELECT * FROM items WHERE ${whereParts.join(' AND ')} ORDER BY ${orderBy} LIMIT ? OFFSET ?`)
@@ -89,27 +90,32 @@ export async function createItemApi(req: Request, env: Env, user: SupabaseUser):
     const originalName = String(body?.originalFilename || body?.filename || '').trim();
     const contentTypeIn = String(body?.contentType || '').trim() || 'application/octet-stream';
     const sha256Hex = String(body?.sha256 || '').trim();
-    const sizeBytes = Number(body?.sizeBytes || 0);
     if (!title) return jsonError('bad_request', 400, { message: 'title required' });
     if (!(CATEGORIES as readonly string[]).includes(category)) return jsonError('bad_request', 400, { message: 'invalid category' });
     if (!fileKeyIn) return jsonError('bad_request', 400, { message: 'fileKey required' });
     // 所有していない staging キーの登録を防止
     const uid = String(user.id || '');
-    if (!fileKeyIn.startsWith(`${MULTIPART_PREFIX}/${uid}/`) || fileKeyIn.includes('..')) {
+    const ownedKey = (k: string) => k.startsWith(`${MULTIPART_PREFIX}/${uid}/`) && !k.includes('..');
+    if (!ownedKey(fileKeyIn)) {
       return jsonError('forbidden', 403, { message: 'fileKey must be your own upload' });
+    }
+    const thumbnailKeyIn = String(body?.thumbnailKey || '').trim();
+    if (thumbnailKeyIn && !ownedKey(thumbnailKeyIn)) {
+      return jsonError('forbidden', 403, { message: 'thumbnailKey must be your own upload' });
     }
     const srcExt = extractExt(fileKeyIn) || extractExt(originalName) || (inferExtFromContentType(contentTypeIn) ? '.' + inferExtFromContentType(contentTypeIn) : '');
     const extNoDot = (srcExt || '').slice(1).toLowerCase() || inferExtFromContentType(contentTypeIn);
     if (!isAllowedByConfig(extNoDot, contentTypeIn, env)) {
       return jsonError('unsupported_type', 400);
     }
-    const maxMb = toInt(env.MAX_FILE_SIZE_MB, 2048);
-    if (Number.isFinite(maxMb) && sizeBytes / (1024 * 1024) > maxMb) {
-      return jsonError('bad_request', 400, { message: `file too large (max ${maxMb}MB)` });
-    }
-    // R2 上に実在することを確認
+    // R2 上に実在することを確認し、実測サイズを採用（sizeBytes の申告値は信用しない）
     const head = await env.R2.head(fileKeyIn).catch(() => null);
     if (!head) return jsonError('bad_request', 400, { message: 'file not found in storage' });
+    const maxMb = toInt(env.MAX_FILE_SIZE_MB, 2048);
+    if (Number.isFinite(maxMb) && head.size / (1024 * 1024) > maxMb) {
+      return jsonError('bad_request', 400, { message: `file too large (max ${maxMb}MB)` });
+    }
+    const actualSizeBytes = head.size;
 
     const id = crypto.randomUUID();
     const nowIso = new Date().toISOString();
@@ -121,8 +127,8 @@ export async function createItemApi(req: Request, env: Env, user: SupabaseUser):
     )
       .bind(
         id, uid, title, category, visibility, description, prompt,
-        originalName, Number.isFinite(sizeBytes) ? sizeBytes : 0, fileKeyIn, sha256Hex || null, contentTypeIn,
-        (srcExt || '').slice(1), String(body?.thumbnailKey || '') || null,
+        originalName, actualSizeBytes, fileKeyIn, sha256Hex || null, contentTypeIn,
+        (srcExt || '').slice(1), thumbnailKeyIn || null,
         visibility === 'public' ? nowIso : null, nowIso, nowIso,
       )
       .run();

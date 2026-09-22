@@ -169,6 +169,8 @@ export async function uploadForm(req: Request, env: Env, url: URL): Promise<Resp
   const errRes = (msg: string, status = 400) =>
     wantsJson ? jsonError('bad_request', status, { message: msg }) : errorPage(env, 'エラー', msg, status, { isLoggedIn: true });
 
+  // 後段で失敗したとき孤児化しないよう、作成した R2 キーを追跡する
+  const createdKeys: string[] = [];
   try {
     await ensureTables(env);
     const form = await req.formData();
@@ -223,17 +225,21 @@ export async function uploadForm(req: Request, env: Env, url: URL): Promise<Resp
     if (!isAllowedByConfig(extNoDot, contentType, env)) {
       return errRes('許可されていないファイル種別です。');
     }
+    // サムネイルは画像のみ受付（text/html 等の混入で stored XSS を防ぐ）。
+    // 本体の R2 保存より前に検証し、400 時に本体が残留しないようにする
+    const thumbFile = thumbnail instanceof File && thumbnail.size > 0 ? thumbnail : null;
+    const thumbCt = thumbFile ? thumbFile.type || 'image/png' : '';
+    if (thumbFile && !thumbCt.startsWith('image/')) return errRes('サムネイルは画像ファイルのみ対応です。');
     if (!preuploadedKey && file instanceof File) {
       await env.R2.put(mainKey, file.stream(), { httpMetadata: { contentType } });
+      createdKeys.push(mainKey);
     }
 
     let thumbKey = '';
-    if (thumbnail instanceof File && thumbnail.size > 0) {
-      const thumbCt = thumbnail.type || 'image/png';
-      // サムネイルは画像のみ受付（text/html 等の混入で stored XSS を防ぐ）
-      if (!thumbCt.startsWith('image/')) return errRes('サムネイルは画像ファイルのみ対応です。');
-      thumbKey = `${MULTIPART_PREFIX}/${uid}/${id}/thumb${extractExt(thumbnail.name || '')}`;
-      await env.R2.put(thumbKey, thumbnail.stream(), { httpMetadata: { contentType: thumbCt } });
+    if (thumbFile) {
+      thumbKey = `${MULTIPART_PREFIX}/${uid}/${id}/thumb${extractExt(thumbFile.name || '')}`;
+      await env.R2.put(thumbKey, thumbFile.stream(), { httpMetadata: { contentType: thumbCt } });
+      createdKeys.push(thumbKey);
     }
 
     const originalName = preuploadedKey ? String(form.get('filename') || '') : (file as File).name || '';
@@ -263,6 +269,8 @@ export async function uploadForm(req: Request, env: Env, url: URL): Promise<Resp
     }
     return Response.redirect(new URL(`/items/${id}`, url.origin), 303);
   } catch (e) {
+    // R2 に保存済み・DB 未登録のオブジェクトが残らないようクリーンアップ
+    for (const k of createdKeys) await env.R2.delete(k).catch(() => {});
     const isDev = String(env.ENVIRONMENT || '').toLowerCase() === 'development';
     const msg = isDev ? String((e as Error)?.message || e) : '登録に失敗しました。しばらくしてから再試行してください。';
     return errRes(msg, 500);

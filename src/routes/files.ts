@@ -73,19 +73,14 @@ export async function serveFile(req: Request, env: Env, url: URL, user: Supabase
   let authorizedByToken = false;
 
   if (token) {
-    try {
-      const dat = await getDownloadToken(token, env);
-      if (!dat || !dat.fileKey || dat.expireAtMs < Date.now() || dat.used) {
-        return new Response('expired', { status: 410 });
-      }
-      key = dat.fileKey;
-      authorizedByToken = true;
-      try {
-        await consumeDownloadToken(token, env);
-      } catch {}
-    } catch {
+    // ここでは検証のみ。消費は GET で配信可能と確認してから行う
+    // （HEAD 先行のダウンロードマネージャーや、R2 取得失敗でトークンを無駄にしない）
+    const dat = await getDownloadToken(token, env).catch(() => null);
+    if (!dat || !dat.fileKey || dat.expireAtMs < Date.now() || dat.used) {
       return new Response('expired', { status: 410 });
     }
+    key = dat.fileKey;
+    authorizedByToken = true;
   }
 
   if (!key) return new Response('missing k', { status: 400 });
@@ -124,6 +119,15 @@ export async function serveFile(req: Request, env: Env, url: URL, user: Supabase
 
     const obj = rangeHeader ? await env.R2.get(key, options) : await env.R2.get(key);
     if (!obj) return new Response('not found', { status: 404 });
+
+    // 使い捨てトークンは GET のみ・オブジェクト確認後に消費。消費失敗時は配信しない
+    if (authorizedByToken && req.method === 'GET') {
+      try {
+        await consumeDownloadToken(token, env);
+      } catch {
+        return new Response('expired', { status: 410 });
+      }
+    }
 
     const headers = new Headers();
     const ct = obj.httpMetadata?.contentType || 'application/octet-stream';

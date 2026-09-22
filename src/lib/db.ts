@@ -6,7 +6,13 @@ import { normalizeUsernameFromId } from './util';
 let ensured: Promise<void> | null = null;
 
 export function ensureTables(env: Env): Promise<void> {
-  if (!ensured) ensured = runEnsureTables(env);
+  if (!ensured) {
+    ensured = runEnsureTables(env).catch((e) => {
+      // 一時的な D1 障害で失敗済み Promise を残さない（次リクエストで再試行）
+      ensured = null;
+      throw e;
+    });
+  }
   return ensured;
 }
 
@@ -114,13 +120,22 @@ export async function upsertUser(env: Env, user: SupabaseUser): Promise<string> 
   const existing = (await env.DB.prepare('SELECT username FROM users WHERE id = ? LIMIT 1').bind(uid).first()) as Record<string, unknown> | null;
   let username = String(existing?.username ?? '');
   if (!/^[a-z0-9]{3,32}$/.test(username)) username = normalizeUsernameFromId(uid);
-  await env.DB.prepare(
-    `INSERT INTO users (id, username, displayName, avatarUrl) VALUES (?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET username = excluded.username, displayName = excluded.displayName, avatarUrl = excluded.avatarUrl`,
-  )
-    .bind(uid, username, display, avatar || null)
-    .run();
-  return username;
+  // username は UNIQUE — 予測可能な生成名が他ユーザーと衝突したら末尾を変えて再試行
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      await env.DB.prepare(
+        `INSERT INTO users (id, username, displayName, avatarUrl) VALUES (?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET username = excluded.username, displayName = excluded.displayName, avatarUrl = excluded.avatarUrl`,
+      )
+        .bind(uid, username, display, avatar || null)
+        .run();
+      return username;
+    } catch (e) {
+      if (!String((e as Error)?.message || e).includes('UNIQUE')) throw e;
+      username = `${normalizeUsernameFromId(uid)}${attempt + 2}`;
+    }
+  }
+  return '';
 }
 
 export async function getUsernameById(env: Env, uid: string): Promise<string> {
